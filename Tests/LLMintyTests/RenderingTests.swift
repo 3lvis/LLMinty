@@ -4,7 +4,7 @@ import XCTest
 final class RenderingTests: XCTestCase {
     func testPolicyForThresholds() {
         let r = Renderer()
-        // Original thresholds
+        // Original bins
         XCTAssertEqual(r.policyFor(score: 0.80), .keepAllBodiesLightlyCondensed)
         XCTAssertEqual(r.policyFor(score: 0.60), .keepPublicBodiesElideOthers)
         XCTAssertEqual(r.policyFor(score: 0.30), .keepOneBodyPerTypeElideRest)
@@ -12,33 +12,26 @@ final class RenderingTests: XCTestCase {
     }
 
     func testRenderSwiftElidesNonPublicBodiesUnderPolicy() throws {
-        // Make internal body long enough so it is NOT considered "short".
+        // Body is deliberately long (> 16 lines) so it is NOT considered "short" with new thresholds
+        let longBody = (0..<20).map { _ in "print(\"x\")" }.joined(separator: "\n        ")
         let swift = """
         public struct S {
             public init() {}
             public func pub() { let x = 1; print(x) }
             func internalOne() {
-                let a = 1
-                let b = 2
-                let c = a + b
-                print(c)
-                if a < b {
-                    for _ in 0..<1 {
-                        print("loop")
-                    }
-                }
-                print("tail")
+                \(longBody)
             }
         }
         """
+
         let r = Renderer()
         let content = try r.renderSwift(text: swift, policy: .keepPublicBodiesElideOthers)
 
         XCTAssertTrue(content.contains("public func pub()"))
         XCTAssertTrue(content.contains("func internalOne()"))
 
-        // Internal function body should be replaced with an elision token
-        XCTAssertTrue(content.contains("internalOne()") && (content.contains("{...}") || content.contains("{ ... }")))
+        // Internal function body should be elided (replaced with an elision token)
+        XCTAssertTrue(content.contains("internalOne()") && (content.contains("{...}") || content.contains("{ ... }") || content.contains(" ... ")))
     }
 
     func testRenderTextCompactsWhitespace() throws {

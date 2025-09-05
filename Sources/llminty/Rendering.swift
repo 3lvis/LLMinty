@@ -39,10 +39,10 @@ final class Renderer {
         var out: [String] = []
         out.reserveCapacity(s.count / 24)
         var lastBlank = false
-        for raw in s.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+        for raw in s.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" }) {
             var line = String(raw)
             while line.last == " " || line.last == "\t" { _ = line.removeLast() }
-            let isBlank = line.trimmingCharacters(in: .whitespaces).isEmpty
+            let isBlank = line.trimmingCharacters(in: CharacterSet.whitespaces).isEmpty
             if isBlank {
                 if !lastBlank { out.append("") }
                 lastBlank = true
@@ -59,10 +59,10 @@ final class Renderer {
         var out: [String] = []
         out.reserveCapacity(s.count / 24)
         var lastBlank = false
-        for raw in s.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+        for raw in s.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" }) {
             var line = String(raw)
             while line.last == " " || line.last == "\t" { _ = line.removeLast() }
-            let isBlank = line.trimmingCharacters(in: .whitespaces).isEmpty
+            let isBlank = line.trimmingCharacters(in: CharacterSet.whitespaces).isEmpty
             if isBlank {
                 if !lastBlank { out.append("") }
                 lastBlank = true
@@ -92,189 +92,178 @@ final class Renderer {
 
     // MARK: - Swift rendering (mechanical elision)
 
-    /// Mechanically elide Swift bodies according to the policy.
-    /// This implementation is intentionally generic and project-agnostic.
+    /// Mechanically elide Swift bodies according to the policy (generic & deterministic).
+    /// - Keeps short bodies everywhere (thresholds below), and keeps the shortest body per type in the 0.25–0.50 bin.
     func renderSwift(text: String, policy: SwiftPolicy) throws -> String {
-        // We’ll scan the raw source to find function-like bodies and perform textual replacements.
-        // This keeps the mechanics deterministic without project-specific logic.
         struct Fn {
-            let range: Range<String.Index>    // entire { ... } including braces
-            let bodyRange: Range<String.Index>// inside braces
+            let range: Range<String.Index>      // full { ... } including braces
+            let bodyRange: Range<String.Index>  // interior text between braces
             let isPublic: Bool
-            let typePath: [String]            // nesting stack of types
+            let typePath: [String]              // nesting types
             let lines: Int
         }
 
-        // 1) Build a simple stack of type names and collect function bodies.
+        let src = text
+
+        // Total lines (for small-file exemption)
+        let totalLines: Int = {
+            var n = 1
+            for ch in src where ch == "\n" { n += 1 }
+            return n
+        }()
+
+        // --- thresholds (mechanical) ---
+        var shortKeepAllPolicies = 12
+        var shortKeepInSignOnly  = 5
+        if totalLines <= 120 {
+            // small-file exemption: be a bit more lenient
+            shortKeepAllPolicies = max(shortKeepAllPolicies, 16)
+            shortKeepInSignOnly  = max(shortKeepInSignOnly, 8)
+        }
+
+        // Scan once; maintain a type context stack using matched braces.
         var fns: [Fn] = []
         fns.reserveCapacity(64)
 
-        var typeStack: [String] = []
-        typeStack.reserveCapacity(8)
-
-        // We’ll scan once, tracking braces to identify both type and function scopes.
-        let src = text
-        let scalars = Array(src) // enables O(1) index stepping by character
-        var i = src.startIndex
+        struct TypeCtx { let name: String; let end: String.Index }
+        var typeCtx: [TypeCtx] = []
 
         @inline(__always)
-        func advance(_ idx: inout String.Index, by n: Int = 1) {
-            for _ in 0..<n { guard idx < src.endIndex else { return }; idx = src.index(after: idx) }
+        func isIdent(_ c: Character) -> Bool { c.isLetter || c.isNumber || c == "_" }
+
+        func skipSpaces(_ i: String.Index) -> String.Index {
+            var j = i
+            while j < src.endIndex, src[j].isWhitespace { j = src.index(after: j) }
+            return j
         }
 
-        // Tiny helpers
-        func isIdentifierChar(_ c: Character) -> Bool {
-            return c.isLetter || c.isNumber || c == "_" // simple enough for our inputs
-        }
-
-        func peekWord(from start: String.Index) -> (String, String.Index) {
-            var j = start
-            var word = ""
-            while j < src.endIndex, isIdentifierChar(src[j]) {
-                word.append(src[j]); advance(&j)
+        func readWord(_ i: String.Index) -> (String, String.Index) {
+            var j = i
+            var w = ""
+            while j < src.endIndex, isIdent(src[j]) {
+                w.append(src[j])
+                j = src.index(after: j)
             }
-            return (word, j)
+            return (w, j)
         }
 
-        // Next braces from position
         func matchBraces(from start: String.Index) -> String.Index? {
             var depth = 0
             var j = start
             while j < src.endIndex {
-                let c = src[j]
-                if c == "{" { depth += 1 }
-                else if c == "}" {
+                let ch = src[j]
+                if ch == "{" { depth += 1 }
+                else if ch == "}" {
                     depth -= 1
-                    if depth == 0 {
-                        return j
-                    }
+                    if depth == 0 { return j }
                 }
-                advance(&j)
+                j = src.index(after: j)
             }
             return nil
         }
 
-        // Count lines in a range
-        func lineCount(_ r: Range<String.Index>) -> Int {
+        func lineCount(in r: Range<String.Index>) -> Int {
             var n = 1
             var j = r.lowerBound
             while j < r.upperBound {
                 if src[j] == "\n" { n += 1 }
-                advance(&j)
+                j = src.index(after: j)
             }
             return n
         }
 
-        // Light tokenizer to find type/func keywords and brace blocks.
+        var i = src.startIndex
         while i < src.endIndex {
-            // Skip whitespace
+            // pop expired type contexts
+            while let last = typeCtx.last, i >= last.end { _ = typeCtx.popLast() }
+
             if src[i].isWhitespace {
-                advance(&i)
+                i = src.index(after: i); continue
+            }
+
+            // gather modifiers
+            var j = i
+            var modifiers: [String] = []
+            let knownMods: Set<String> = ["public","open","internal","private","fileprivate","static","class","final","mutating","nonmutating","override"]
+            while j < src.endIndex {
+                j = skipSpaces(j)
+                let (w, afterW) = readWord(j)
+                if w.isEmpty || !knownMods.contains(w) { break }
+                modifiers.append(w)
+                j = afterW
+            }
+
+            // keyword after modifiers
+            let (kw, afterKW) = readWord(j)
+            if kw == "struct" || kw == "class" || kw == "enum" || kw == "protocol" {
+                var nameStart = afterKW
+                nameStart = skipSpaces(nameStart)
+                let (name, afterName) = readWord(nameStart)
+
+                var k = afterName
+                while k < src.endIndex, src[k] != "{" { k = src.index(after: k) }
+                if k < src.endIndex, src[k] == "{", let end = matchBraces(from: k) {
+                    let endPlusOne = src.index(after: end)
+                    typeCtx.append(.init(name: name.isEmpty ? "<anon>" : name, end: endPlusOne))
+                    i = src.index(after: k)
+                    continue
+                }
+                i = afterName
                 continue
             }
 
-            // Capture modifiers and keyword
-            var j = i
-            var modifiers: [String] = []
-            // Collect zero or more modifiers (public/open/internal/private/static/final/etc.)
-            while j < src.endIndex {
-                // Skip spaces
-                while j < src.endIndex, src[j].isWhitespace { advance(&j) }
-                let (word, after) = peekWord(from: j)
-                if word.isEmpty { break }
-                let known = ["public","open","internal","private","fileprivate",
-                             "static","class","final","mutating","nonmutating","override"]
-                if known.contains(word) {
-                    modifiers.append(word)
-                    j = after
-                } else {
-                    break
-                }
-            }
-            // Now expect a keyword (struct/class/enum/protocol/func/init/subscript) or skip
-            let (kw, afterKW) = peekWord(from: j)
-            if kw == "struct" || kw == "class" || kw == "enum" || kw == "protocol" {
-                // Read name
-                var nameStart = afterKW
-                while nameStart < src.endIndex, src[nameStart].isWhitespace { advance(&nameStart) }
-                let (name, afterName) = peekWord(from: nameStart)
-                // Find opening brace of the type
-                var k = afterName
-                while k < src.endIndex, src[k] != "{" { advance(&k) }
-                if k < src.endIndex, src[k] == "{", let end = matchBraces(from: k) {
-                    typeStack.append(name.isEmpty ? "<anon>" : name)
-                    // Recurse into body: we’ll process inner items as we scan; jump into type body
-                    // but we still need to keep scanning linearly; we won’t skip.
-                    // We’ll pop when we pass the closing brace.
-                    // To detect pop, we’ll push a sentinel with end index.
-                }
-                // Move i forward a bit to avoid reprocessing the same token
-                i = k < src.endIndex ? src.index(after: k) : afterName
-                continue
-            } else if kw == "func" || kw == "init" || kw == "subscript" {
-                // Find the opening brace for the body
+            if kw == "func" || kw == "init" || kw == "subscript" {
                 var k = afterKW
-                // Advance to first '{' that begins the body (skip generics/args/throws -> {...})
-                while k < src.endIndex, src[k] != "{" && src[k] != "\n" { advance(&k) }
-                if k < src.endIndex, src[k] == "{", let bodyEnd = matchBraces(from: k) {
-                    let bodyStart = k
-                    let endIdx = src.index(after: bodyEnd)
+                while k < src.endIndex, src[k] != "{" && src[k] != "\n" { k = src.index(after: k) }
+                if k < src.endIndex, src[k] == "{", let end = matchBraces(from: k) {
                     let isPub = modifiers.contains("public") || modifiers.contains("open")
-                    let lines = lineCount(bodyStart..<endIdx)
-                    fns.append(Fn(range: bodyStart..<endIdx,
-                                  bodyRange: src.index(after: bodyStart)..<bodyEnd,
-                                  isPublic: isPub,
-                                  typePath: typeStack,
-                                  lines: lines))
-                    i = endIdx
+                    let endPlusOne = src.index(after: end)
+                    let fullRange: Range<String.Index> = k..<endPlusOne
+                    let bodyStart = src.index(after: k)
+                    let bodyRange: Range<String.Index> = bodyStart..<end
+                    let lines = lineCount(in: fullRange)
+                    let typePath = typeCtx.map { $0.name }
+                    fns.append(.init(range: fullRange, bodyRange: bodyRange, isPublic: isPub, typePath: typePath, lines: lines))
+                    i = endPlusOne
                     continue
                 }
             }
 
-            // On unmatched/other tokens just advance
-            advance(&i)
+            i = src.index(after: i)
         }
 
-        // 2) Decide which bodies to elide based on policy and generic size heuristics.
-        let shortKeepAllPolicies = 8   // ≤ 8 lines are kept even if non-public in mid bin
-        let shortKeepInSignOnly  = 3   // ≤ 3 lines are kept even in signaturesOnly
-
+        // --- Decide what to elide ---
         var toElide: [Range<String.Index>] = []
         toElide.reserveCapacity(fns.count)
 
         switch policy {
         case .keepAllBodiesLightlyCondensed:
-            // Keep all bodies, just lightly condense whitespace later.
+            // keep all
             break
 
         case .keepPublicBodiesElideOthers:
             for fn in fns {
                 if fn.isPublic { continue }
-                if fn.lines <= shortKeepAllPolicies { continue } // keep short private/internal bodies
+                if fn.lines <= shortKeepAllPolicies { continue }
                 toElide.append(fn.bodyRange)
             }
 
         case .keepOneBodyPerTypeElideRest:
-            // Group by type path; keep shortest body in each group, elide the others.
-            var bestByType: [String: Fn] = [:]
-            bestByType.reserveCapacity(16)
-            func key(for path: [String]) -> String { path.joined(separator: ".") }
-
+            // keep shortest per type path
+            var shortest: [String: Fn] = [:]
+            shortest.reserveCapacity(16)
+            func key(_ path: [String]) -> String { path.joined(separator: ".") }
             for fn in fns {
-                let k = key(for: fn.typePath)
-                if let prev = bestByType[k] {
-                    if fn.lines < prev.lines {
-                        bestByType[k] = fn
-                    }
+                let k = key(fn.typePath)
+                if let prev = shortest[k] {
+                    if fn.lines < prev.lines { shortest[k] = fn }
                 } else {
-                    bestByType[k] = fn
+                    shortest[k] = fn
                 }
             }
-            let keepSet: Set<ObjectIdentifier> = Set(bestByType.values.map { ObjectIdentifier($0 as AnyObject) }) // not usable with struct
-            // Instead, mark all others that are not the chosen one for their type.
             for fn in fns {
-                if let chosen = bestByType[key(for: fn.typePath)], chosen.range == fn.range {
-                    // keep
+                if let chosen = shortest[key(fn.typePath)], chosen.range == fn.range {
+                    // keep the chosen one
                 } else {
                     toElide.append(fn.bodyRange)
                 }
@@ -282,34 +271,28 @@ final class Renderer {
 
         case .signaturesOnly:
             for fn in fns {
-                if fn.lines <= shortKeepInSignOnly { continue } // keep ultra-short even here
+                if fn.lines <= shortKeepInSignOnly { continue }
                 toElide.append(fn.bodyRange)
             }
         }
 
-        // 3) Apply elisions (replace body contents with "{...}" preserving surrounding braces).
-        // Sort ranges high→low to keep indices valid as we mutate.
+        // --- Apply replacements (body -> " ... ") high→low to keep indices stable
         toElide.sort { $0.lowerBound > $1.lowerBound }
-
         var rendered = src
         for r in toElide {
-            // r is body-only: replace interior with "..."; keep single spaces around if present.
             rendered.replaceSubrange(r, with: " ... ")
         }
 
-        // 4) Whitespace pass if keeping all bodies
-        switch policy {
-        case .keepAllBodiesLightlyCondensed:
+        // --- Whitespace light pass for the top policy only
+        if case .keepAllBodiesLightlyCondensed = policy {
             rendered = lightlyCondenseWhitespace(rendered)
-        default:
-            break
         }
 
         return rendered
     }
 }
 
-// MARK: - Small helpers (kept for parity with earlier structure)
+// MARK: - Small helpers (parity with existing structure)
 
 private extension String {
     func trimRightSpaces() -> String {
@@ -330,8 +313,4 @@ private extension DeclModifierListSyntax {
 }
 private extension Optional where Wrapped == DeclModifierListSyntax {
     var containsPublicOrOpen: Bool { self?.containsPublicOrOpen ?? false }
-}
-
-extension StringProtocol {
-    var isNewline: Bool { return self == "\n" || self == "\r\n" }
 }
