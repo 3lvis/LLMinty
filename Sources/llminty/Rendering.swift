@@ -205,7 +205,7 @@ final class Renderer {
             result = regex.stringByReplacingMatches(
                 in: result,
                 range: NSRange(result.startIndex..., in: result),
-                withTemplate: "{ ...}"
+                withTemplate: "{ ... }"
             )
         }
         return lightlyCondenseWhitespace(result)

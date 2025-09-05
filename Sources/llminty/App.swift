@@ -18,7 +18,7 @@ enum BuiltInExcludes {
             "*.xcassets/", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.heic", "*.pdf",
             "*.svg", "*.webp", "*.ttf", "*.otf", "*.woff", "*.woff2",
             "*.zip", "*.tar", "*.tar.gz", "*.rar", "*.7z",
-            "*.mp3", "*.wav", "*.aiff", "*.m4a", "*.mp4", "*.mov",
+            "*.mp3", "*.wav", "*.aiff", "*.m4a", "*.mp4", "*.mov", "*.bin",
             // Self-exclude
             outputFileName
         ]
