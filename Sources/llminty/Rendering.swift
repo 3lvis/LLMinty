@@ -29,9 +29,7 @@ final class Renderer {
         }
     }
 
-    private func compactText(_ s: String) -> String {
-        lightlyCondenseWhitespace(s)
-    }
+    private func compactText(_ s: String) -> String { lightlyCondenseWhitespace(s) }
 
     // Remove trailing spaces; collapse 2+ blank lines to single blank; preserve content
     private func lightlyCondenseWhitespace(_ s: String) -> String {
@@ -44,7 +42,8 @@ final class Renderer {
             let blank = line.trimmingCharacters(in: CharacterSet.whitespaces).isEmpty
             if blank && lastWasBlank { continue }
             out += line
-            if lineSub.last?.isNewline == true { out.append("\n") }
+            // `split(whereSeparator:)` does not include the separator; recreate line endings
+            out.append("\n")
             lastWasBlank = blank
         }
         return out
@@ -70,20 +69,34 @@ final class Renderer {
         let planner = ElisionPlanner(plan: &plan)
         planner.walk(tree)
 
-        // Build resulting text by splicing ranges
-        var out = text
+        // Build a single, combined list of edits, all based on ORIGINAL utf8 offsets.
+        // Apply from highest -> lowest to keep remaining offsets valid.
+        struct Edit { let range: Range<Int>; let replacement: String }
+        var edits: [Edit] = []
+        edits.reserveCapacity(plan.longBodyTrims.count + plan.elideRanges.count)
+        edits.append(contentsOf: plan.longBodyTrims.map { Edit(range: $0.range, replacement: $0.replacement) })
+        edits.append(contentsOf: plan.elideRanges.map { Edit(range: $0, replacement: " {...}\n") })
+        edits.sort { $0.range.lowerBound > $1.range.lowerBound }
 
-        // Apply very-long body trims first (for keep policies), then elisions.
-        for trim in plan.longBodyTrims.sorted(by: { $0.range.lowerBound > $1.range.lowerBound }) {
-            let start = out.index(out.startIndex, offsetBy: trim.range.lowerBound)
-            let end   = out.index(out.startIndex, offsetBy: trim.range.upperBound)
-            out.replaceSubrange(start..<end, with: trim.replacement)
+        var out = text
+        let utf8Count = { (s: String) in s.utf8.count }
+
+        // Helper: convert utf8 offset to String.Index safely, clamped in-bounds.
+        func indexFromUTF8Offset(_ off: Int, in s: String) -> String.Index {
+            let c = max(0, min(off, utf8Count(s)))
+            let i8 = s.utf8.index(s.utf8.startIndex, offsetBy: c)
+            // `within:` returns nil only if not on a character boundary; SwiftSyntax offsets are on boundaries.
+            return String.Index(i8, within: s) ?? s.endIndex
         }
 
-        for r in plan.elideRanges.sorted(by: { $0.lowerBound > $1.lowerBound }) {
-            let start = out.index(out.startIndex, offsetBy: r.lowerBound)
-            let end   = out.index(out.startIndex, offsetBy: r.upperBound)
-            out.replaceSubrange(start..<end, with: " {...}\n")
+        for e in edits {
+            // Validate original offsets against the current string length; since we go hi->lo,
+            // earlier (lower) ranges remain valid after higher replacements.
+            guard e.range.lowerBound <= e.range.upperBound else { continue }
+            let start = indexFromUTF8Offset(e.range.lowerBound, in: out)
+            let end   = indexFromUTF8Offset(e.range.upperBound, in: out)
+            guard start <= end else { continue }
+            out.replaceSubrange(start..<end, with: e.replacement)
         }
 
         return lightlyCondenseWhitespace(out)
