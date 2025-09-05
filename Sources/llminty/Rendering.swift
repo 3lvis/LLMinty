@@ -220,3 +220,7 @@ private extension DeclModifierListSyntax {
 private extension Optional where Wrapped == DeclModifierListSyntax {
     var containsPublicOrOpen: Bool { self?.containsPublicOrOpen ?? false }
 }
+
+extension StringProtocol {
+    var isNewline: Bool { return self == "\n" || self == "\r\n" }
+}

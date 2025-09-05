@@ -1,4 +1,4 @@
-// swift-tools-version:5.10
+// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
@@ -10,8 +10,8 @@ let package = Package(
         .executable(name: "llminty", targets: ["llminty"])
     ],
     dependencies: [
-        // Match your toolchain version. 510.x = Swift 5.10
-        .package(url: "https://github.com/apple/swift-syntax.git", exact: "510.0.2")
+        // Match your Swift 6.1 toolchain. 601.x == SwiftSyntax for Swift 6.1
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", exact: "601.0.1")
     ],
     targets: [
         .executableTarget(
