@@ -1,8 +1,9 @@
-
 import XCTest
 @testable import llminty
 
 final class LLMintyTests: XCTestCase {
+
+    // End-to-end: builds a mini project, runs the app, checks minty.txt framing and ignore behavior.
     func testEndToEndRunCreatesMintyFile() throws {
         let fm = FileManager.default
         let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("llminty-int-" + UUID().uuidString)
@@ -45,5 +46,60 @@ final class LLMintyTests: XCTestCase {
         XCTAssertTrue(text.contains("FILE: Notes.txt"))
         // Should not include Secret files
         XCTAssertFalse(text.contains("Secret/hidden.txt"))
+    }
+
+    // Compaction policy: keep exactly one blank line after each FILE header, drop others,
+    // but allow a single terminal blank line (trailing newline in the file).
+    func testKeepsOneBlankAfterHeadersAndDropsOthers() {
+        let input = """
+        FILE: a.swift
+        
+        
+        import Foundation
+        
+        struct A {}
+        
+        // END
+        FILE: b.txt
+        
+        
+        line one
+        
+        line two
+        
+        // END
+        """
+
+        let compact = postProcessMinty(input)
+
+        // 1) No triple newlines remain
+        XCTAssertFalse(compact.contains("\n\n\n"))
+
+        // 2) There should be exactly one blank line after each FILE header
+        let lines = compact.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
+        var headerIndices: [Int] = []
+        for (i, l) in lines.enumerated() where l.hasPrefix("FILE: ") {
+            headerIndices.append(i)
+        }
+        XCTAssertEqual(headerIndices.count, 2, "Should find exactly two FILE headers")
+        for idx in headerIndices {
+            XCTAssertTrue(idx + 1 < lines.count)
+            XCTAssertEqual(lines[idx + 1], "", "There must be exactly one blank line after FILE header")
+        }
+
+        // 3) Any blank-only line must be either:
+        //    (a) directly after a FILE header, or
+        //    (b) the final terminal blank from the trailing newline
+        for i in 0..<lines.count {
+            if lines[i].trimmingCharacters(in: .whitespaces).isEmpty {
+                let isTerminalBlank = (i == lines.count - 1) // allow single trailing newline
+                let isAfterHeader = (i > 0 && lines[i - 1].hasPrefix("FILE: "))
+                XCTAssertTrue(isAfterHeader || isTerminalBlank,
+                              "Blank line found that is not directly after a FILE header nor the terminal trailing newline")
+            }
+        }
+
+        // 4) Trailing newline preserved
+        XCTAssertTrue(compact.hasSuffix("\n"))
     }
 }

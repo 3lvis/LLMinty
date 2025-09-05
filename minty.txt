@@ -1,650 +1,583 @@
 FILE: Sources/llminty/IgnoreMatcher.swift
 import Foundation
-
 /// Minimal gitignore-like engine with globs (* ? **), dir-trailing '/', root-anchored '/' and negation '!'
 /// Evaluation order: built-ins first (exclude bias), then user's .mintyignore (last match wins)
 struct IgnoreMatcher {
-    struct Pattern {
-        let negated: Bool
-        let dirOnly: Bool
-        let anchorRoot: Bool
-        let raw: String
-        let segments: [String] // split on '/'
-    }
-
-    private let ordered: [Pattern]
-
-    init(builtInPatterns: [String], userFileText: String) throws {
-        var list: [Pattern] = []
-        for p in builtInPatterns { if let pat = Self.parse(line: p) { list.append(pat) } }
-        for line in userFileText.components(separatedBy: .newlines) {
-            if let pat = Self.parse(line: line) { list.append(pat) }
-        }
-        self.ordered = list
-    }
-
-    private static func parse(line: String) -> Pattern?  {...}
-
-    func isIgnored(_ relativePath: String, isDirectory: Bool) -> Bool  {...}
-
-    private static func match(pattern p: Pattern, pathSegments: [String]) -> Bool  {...}
-
-    // '**' matches zero or more segments. '*' matches within a segment (no '/').
-    private static func matchFrom(patternSegs: [String], pathSegs: [String], startAt: Int) -> Bool  {...}
-
+struct Pattern {
+let negated: Bool
+let dirOnly: Bool
+let anchorRoot: Bool
+let raw: String
+let segments: [String] // split on '/'
+}
+private let ordered: [Pattern]
+init(builtInPatterns: [String], userFileText: String) throws {
+var list: [Pattern] = []
+for p in builtInPatterns { if let pat = Self.parse(line: p) { list.append(pat) } }
+for line in userFileText.components(separatedBy: .newlines) {
+if let pat = Self.parse(line: line) { list.append(pat) }
+}
+self.ordered = list
+}
+private static func parse(line: String) -> Pattern?  {...}
+func isIgnored(_ relativePath: String, isDirectory: Bool) -> Bool  {...}
+private static func match(pattern p: Pattern, pathSegments: [String]) -> Bool  {...}
+// '**' matches zero or more segments. '*' matches within a segment (no '/').
+private static func matchFrom(patternSegs: [String], pathSegs: [String], startAt: Int) -> Bool  {...}
 // END
 FILE: Sources/llminty/FileScanner.swift
 import Foundation
-
 enum FileKind {
-    case swift, json, text, binary, unknown
+case swift, json, text, binary, unknown
 }
-
 struct RepoFile {
-    let relativePath: String
-    let absoluteURL: URL
-    let isDirectory: Bool
-    let kind: FileKind
-    let size: UInt64
+let relativePath: String
+let absoluteURL: URL
+let isDirectory: Bool
+let kind: FileKind
+let size: UInt64
 }
-
 enum ScanLimits {
-    static let maxFileBytes: UInt64 = 2 * 1024 * 1024 // 2 MB per file cap
+static let maxFileBytes: UInt64 = 2 * 1024 * 1024 // 2 MB per file cap
 }
-
 struct FileScanner {
-    let root: URL
-    let matcher: IgnoreMatcher
-
-    func scan() throws -> [RepoFile] {
-        var results: [RepoFile] = []
-        let fm = FileManager.default
-
-        guard let enumerator = fm.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
-            options: [.skipsHiddenFiles],
-            errorHandler: { (url, error) -> Bool in
-                // Keep going on errors; this is a read-only pass.
-                return true
-            }
-        ) else {
-            throw NSError(domain: "llminty", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to enumerate directory"])
-        }
-
-        for case let url as URL in enumerator {
-            let rel = (url.path).path(replacingBase: root.path)
-            let rIsDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            if matcher.isIgnored(rel, isDirectory: rIsDir) {
-                if rIsDir { enumerator.skipDescendants() }
-                continue
-            }
-            if rIsDir { continue }
-
-            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { UInt64($0) } ?? 0
-            let ext = url.pathExtension.lowercased()
-            let kind: FileKind
-            switch ext {
-            case "swift": kind = .swift
-            case "json":  kind = .json
-            case "md", "yml", "yaml", "xml", "plist", "txt", "sh", "toml": kind = .text
-            default:
-                if size > ScanLimits.maxFileBytes { kind = .binary }
-                else if Self.seemsBinary(url: url) { kind = .binary }
-                else { kind = .unknown }
-            }
-            results.append(RepoFile(relativePath: rel, absoluteURL: url, isDirectory: false, kind: kind, size: size))
-        }
-
-        // Deterministic stable path sort
-        results.sort { $0.relativePath < $1.relativePath }
-        return results
-    }
-
-    static func seemsBinary(url: URL) -> Bool  {...}
-
+let root: URL
+let matcher: IgnoreMatcher
+func scan() throws -> [RepoFile] {
+var results: [RepoFile] = []
+let fm = FileManager.default
+guard let enumerator = fm.enumerator(
+at: root,
+includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
+options: [.skipsHiddenFiles],
+errorHandler: { (url, error) -> Bool in
+// Keep going on errors; this is a read-only pass.
+return true
 }
-
+) else {
+throw NSError(domain: "llminty", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to enumerate directory"])
+}
+for case let url as URL in enumerator {
+let rel = (url.path).path(replacingBase: root.path)
+let rIsDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+if matcher.isIgnored(rel, isDirectory: rIsDir) {
+if rIsDir { enumerator.skipDescendants() }
+continue
+}
+if rIsDir { continue }
+let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { UInt64($0) } ?? 0
+let ext = url.pathExtension.lowercased()
+let kind: FileKind
+switch ext {
+case "swift": kind = .swift
+case "json":  kind = .json
+case "md", "yml", "yaml", "xml", "plist", "txt", "sh", "toml": kind = .text
+default:
+if size > ScanLimits.maxFileBytes { kind = .binary }
+else if Self.seemsBinary(url: url) { kind = .binary }
+else { kind = .unknown }
+}
+results.append(RepoFile(relativePath: rel, absoluteURL: url, isDirectory: false, kind: kind, size: size))
+}
+// Deterministic stable path sort
+results.sort { $0.relativePath < $1.relativePath }
+return results
+}
+static func seemsBinary(url: URL) -> Bool  {...}
+}
 private extension String {
-    func removingPrefix(_ p: String) -> String {
-        guard hasPrefix(p) else { return self }
-        return String(dropFirst(p.count))
-    }
-
-    func relativePath(from root: String) -> String  {...}
-
+func removingPrefix(_ p: String) -> String {
+guard hasPrefix(p) else { return self }
+return String(dropFirst(p.count))
 }
-
+func relativePath(from root: String) -> String  {...}
+}
 extension String {
-    func path(replacingBase base: String) -> String  {...}
-
+func path(replacingBase base: String) -> String  {...}
 }
-
 // END
 FILE: Sources/llminty/SwiftAnalyzer.swift
 import Foundation
 import SwiftParser
 import SwiftSyntax
-
 // MARK: - Intermediate models
-
 struct AnalyzedFile {
-    let file: RepoFile
-    let text: String
-    // Declarations in this file (type names)
-    var declaredTypes: Set<String>
-    // Public/open API weighted counts (protocols ×2)
-    var publicAPIScoreRaw: Int
-    // Referenced type identifiers (simple heuristic)
-    var referencedTypes: [String: Int] // name -> occurrences
-    // Cyclomatic complexity sum across functions (very rough)
-    var complexity: Int
-    // Heuristic: does this target declare @main or SwiftUI.App or have top-level code?
-    var isEntrypoint: Bool
-    // Outgoing edges to other repo files by relative path (inferred via simple symbol map)
-    var outgoingFileDeps: [String]
-    // Inbound count (how many other files reference this one)
-    var inboundRefCount: Int
+let file: RepoFile
+let text: String
+// Declarations in this file (type names)
+var declaredTypes: Set<String>
+// Public/open API weighted counts (protocols ×2)
+var publicAPIScoreRaw: Int
+// Referenced type identifiers (simple heuristic)
+var referencedTypes: [String: Int] // name -> occurrences
+// Cyclomatic complexity sum across functions (very rough)
+var complexity: Int
+// Heuristic: does this target declare @main or SwiftUI.App or have top-level code?
+var isEntrypoint: Bool
+// Outgoing edges to other repo files by relative path (inferred via simple symbol map)
+var outgoingFileDeps: [String]
+// Inbound count (how many other files reference this one)
+var inboundRefCount: Int
 }
-
 // MARK: - Analyzer
-
 final class SwiftAnalyzer {
-
-    func analyze(files: [RepoFile]) throws -> [AnalyzedFile]  {...}
-
-    private func analyzeSwift(path: String, text: String) -> AnalyzedFile  {...}
-
+func analyze(files: [RepoFile]) throws -> [AnalyzedFile]  {...}
+private func analyzeSwift(path: String, text: String) -> AnalyzedFile  {...}
 }
-
 // MARK: - Collector with SwiftSyntax
-
 private struct CollectorContext {
-    var declaredTypes: Set<String> = []
-    var publicAPIScoreRaw: Int = 0
-    var referencedTypes: [String: Int] = [:]
-    var complexity: Int = 0
-    var isEntrypoint: Bool = false
-    var importedModules: Set<String> = []
-    var hasTopLevelCode: Bool = false
+var declaredTypes: Set<String> = []
+var publicAPIScoreRaw: Int = 0
+var referencedTypes: [String: Int] = [:]
+var complexity: Int = 0
+var isEntrypoint: Bool = false
+var importedModules: Set<String> = []
+var hasTopLevelCode: Bool = false
 }
-
 private final class SwiftCollector: SyntaxVisitor {
-    private var ctx: UnsafeMutablePointer<CollectorContext>
-    private var typeStack: [String] = []
-
-    init(context: inout CollectorContext)  {...}
-
-    override func visit(_ node: ImportDeclSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    override func visitPost(_ node: StructDeclSyntax)  {...}
-
-    override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    override func visitPost(_ node: ClassDeclSyntax)  {...}
-
-    override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    override func visitPost(_ node: EnumDeclSyntax)  {...}
-
-    override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    override func visitPost(_ node: ProtocolDeclSyntax)  {...}
-
-    override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    override func visit(_ node: SourceFileSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    override func visitPost(_ node: SourceFileSyntax)  {...}
-
-    // Types referenced (IdentifierTypeSyntax and MemberTypeSyntax roots)
-    override func visit(_ node: IdentifierTypeSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    override func visit(_ node: MemberTypeSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    // Complexity: count control-flow tokens and boolean ops
-    override func visit(_ token: TokenSyntax) -> SyntaxVisitorContinueKind  {...}
-
+private var ctx: UnsafeMutablePointer<CollectorContext>
+private var typeStack: [String] = []
+init(context: inout CollectorContext)  {...}
+override func visit(_ node: ImportDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visitPost(_ node: StructDeclSyntax)  {...}
+override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visitPost(_ node: ClassDeclSyntax)  {...}
+override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visitPost(_ node: EnumDeclSyntax)  {...}
+override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visitPost(_ node: ProtocolDeclSyntax)  {...}
+override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visit(_ node: SourceFileSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visitPost(_ node: SourceFileSyntax)  {...}
+// Types referenced (IdentifierTypeSyntax and MemberTypeSyntax roots)
+override func visit(_ node: IdentifierTypeSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visit(_ node: MemberTypeSyntax) -> SyntaxVisitorContinueKind  {...}
+// Complexity: count control-flow tokens and boolean ops
+override func visit(_ token: TokenSyntax) -> SyntaxVisitorContinueKind  {...}
 }
-
 // MARK: - Small helpers
-
 private extension DeclModifierListSyntax {
-    var containsPublicOrOpen: Bool {
-        for m in self {
-            let k = m.name.text
-            if k == "public" || k == "open" { return true }
-        }
-        return false
-    }
+var containsPublicOrOpen: Bool {
+for m in self {
+let k = m.name.text
+if k == "public" || k == "open" { return true }
 }
-
+return false
+}
+}
 private extension Optional where Wrapped == DeclModifierListSyntax {
-    var containsPublicOrOpen: Bool { self?.containsPublicOrOpen ?? false }
+var containsPublicOrOpen: Bool { self?.containsPublicOrOpen ?? false }
 }
-
 private extension StructDeclSyntax {
-    func inheritanceClauseContains(type: String) -> Bool  {...}
-
+func inheritanceClauseContains(type: String) -> Bool  {...}
 }
-
 // END
 FILE: Sources/llminty/Scoring.swift
 import Foundation
-
 struct ScoredFile {
-    let analyzed: AnalyzedFile
-    let score: Double
-    let fanIn: Int
-    let pageRank: Double
+let analyzed: AnalyzedFile
+let score: Double
+let fanIn: Int
+let pageRank: Double
 }
-
 final class Scoring {
-
-    struct Norm {
-        var fanInMax = 0
-        var pageRankMax = 0.0
-        var apiMax = 0
-        var influenceMax = 0
-        var complexityMax = 0
-    }
-
-    /// Compute a composite [0,1] score for each file.
-    /// Heuristics balance inbound references, PageRank, public API surface, "influence"
-    /// (outgoing refs) and measured complexity; + entrypoint bonus.
-    func score(analyzed: [AnalyzedFile]) -> [ScoredFile] {
-        // Precompute PR and fan-in
-        let pr = GraphCentrality.pageRank(analyzed)
-        var fanIn: [String: Int] = [:]
-        for a in analyzed {
-            fanIn[a.file.relativePath] = a.inboundRefCount
-        }
-
-        // Collect maxima for normalization
-        var norm = Norm()
-        for a in analyzed {
-            norm.fanInMax = max(norm.fanInMax, fanIn[a.file.relativePath] ?? 0)
-            norm.pageRankMax = max(norm.pageRankMax, pr[a.file.relativePath] ?? 0.0)
-            norm.apiMax = max(norm.apiMax, a.publicAPIScoreRaw)
-            // "Influence": number of distinct outgoing file deps (fan-out)
-            norm.influenceMax = max(norm.influenceMax, a.outgoingFileDeps.count)
-            norm.complexityMax = max(norm.complexityMax, a.complexity)
-        }
-
-        // Safe division
-        func nzDiv(_ num: Double, by den: Double) -> Double  {...}
-
-        var out: [ScoredFile] = []
-        out.reserveCapacity(analyzed.count)
-
-        for a in analyzed {
-            let fanInN   = nzDiv(Double(fanIn[a.file.relativePath] ?? 0), by: Double(norm.fanInMax))
-            let prN      = nzDiv(pr[a.file.relativePath] ?? 0.0, by: norm.pageRankMax)
-            let apiN     = nzDiv(Double(a.publicAPIScoreRaw), by: Double(norm.apiMax))
-            let inflN    = nzDiv(Double(a.outgoingFileDeps.count), by: Double(norm.influenceMax))
-            let cxN      = nzDiv(Double(a.complexity), by: Double(norm.complexityMax))
-            let entry    = a.isEntrypoint ? 1.0 : 0.0
-
-            // Weights: 5 equally weighted primary signals + entrypoint bonus
-            let score =
-            0.18 * fanInN +
-            0.18 * prN +
-            0.18 * apiN +
-            0.18 * inflN +
-            0.18 * cxN +
-            0.10 * entry
-
-            out.append(
-                ScoredFile(
-                    analyzed: a,
-                    score: max(0.0, min(1.0, score)),
-                    fanIn: fanIn[a.file.relativePath] ?? 0,
-                    pageRank: pr[a.file.relativePath] ?? 0.0
-                )
-            )
-        }
-        return out
-    }
+struct Norm {
+var fanInMax = 0
+var pageRankMax = 0.0
+var apiMax = 0
+var influenceMax = 0
+var complexityMax = 0
 }
-
+/// Compute a composite [0,1] score for each file.
+/// Heuristics balance inbound references, PageRank, public API surface, "influence"
+/// (outgoing refs) and measured complexity; + entrypoint bonus.
+func score(analyzed: [AnalyzedFile]) -> [ScoredFile] {
+// Precompute PR and fan-in
+let pr = GraphCentrality.pageRank(analyzed)
+var fanIn: [String: Int] = [:]
+for a in analyzed {
+fanIn[a.file.relativePath] = a.inboundRefCount
+}
+// Collect maxima for normalization
+var norm = Norm()
+for a in analyzed {
+norm.fanInMax = max(norm.fanInMax, fanIn[a.file.relativePath] ?? 0)
+norm.pageRankMax = max(norm.pageRankMax, pr[a.file.relativePath] ?? 0.0)
+norm.apiMax = max(norm.apiMax, a.publicAPIScoreRaw)
+// "Influence": number of distinct outgoing file deps (fan-out)
+norm.influenceMax = max(norm.influenceMax, a.outgoingFileDeps.count)
+norm.complexityMax = max(norm.complexityMax, a.complexity)
+}
+// Safe division
+func nzDiv(_ num: Double, by den: Double) -> Double  {...}
+var out: [ScoredFile] = []
+out.reserveCapacity(analyzed.count)
+for a in analyzed {
+let fanInN   = nzDiv(Double(fanIn[a.file.relativePath] ?? 0), by: Double(norm.fanInMax))
+let prN      = nzDiv(pr[a.file.relativePath] ?? 0.0, by: norm.pageRankMax)
+let apiN     = nzDiv(Double(a.publicAPIScoreRaw), by: Double(norm.apiMax))
+let inflN    = nzDiv(Double(a.outgoingFileDeps.count), by: Double(norm.influenceMax))
+let cxN      = nzDiv(Double(a.complexity), by: Double(norm.complexityMax))
+let entry    = a.isEntrypoint ? 1.0 : 0.0
+// Weights: 5 equally weighted primary signals + entrypoint bonus
+let score =
+0.18 * fanInN +
+0.18 * prN +
+0.18 * apiN +
+0.18 * inflN +
+0.18 * cxN +
+0.10 * entry
+out.append(
+ScoredFile(
+analyzed: a,
+score: max(0.0, min(1.0, score)),
+fanIn: fanIn[a.file.relativePath] ?? 0,
+pageRank: pr[a.file.relativePath] ?? 0.0
+)
+)
+}
+return out
+}
+}
 // END
 FILE: Sources/llminty/GraphCentrality.swift
 import Foundation
-
 enum GraphCentrality {
-
-    // PageRank on file dependency graph (A -> B means A depends on B)
-    static func pageRank(_ analyzed: [AnalyzedFile],
-                         damping: Double = 0.85,
-                         iterations: Int = 20) -> [String: Double] {
-        let files: [String] = analyzed.map { $0.file.relativePath }
-        let index: [String: Int] = Dictionary(uniqueKeysWithValues: files.enumerated().map { ($1, $0) })
-        let n = files.count
-        guard n > 0 else { return [:] }
-
-        // Outgoing edges (by index)
-        var outEdges: [Set<Int>] = Array(repeating: [], count: n)
-        for a in analyzed {
-            let i = index[a.file.relativePath]!
-            for dep in a.outgoingFileDeps {
-                if let j = index[dep] { outEdges[i].insert(j) }
-            }
-        }
-
-        // Init PR
-        var pr = Array(repeating: 1.0 / Double(n), count: n)
-        var newPR = Array(repeating: 0.0, count: n)
-        let base = (1.0 - damping) / Double(n)
-
-        for _ in 0..<iterations {
-            // Distribute rank
-            for i in 0..<n { newPR[i] = base }
-            for i in 0..<n {
-                let outs = outEdges[i]
-                if outs.isEmpty {
-                    // Dangling node: spread evenly
-                    let share = damping * pr[i] / Double(n)
-                    for j in 0..<n { newPR[j] += share }
-                } else {
-                    let share = damping * pr[i] / Double(outs.count)
-                    for j in outs { newPR[j] += share }
-                }
-            }
-            pr = newPR
-        }
-
-        // Map back to paths
-        var out: [String: Double] = [:]
-        for (p, i) in index { out[p] = pr[i] }
-        return out
-    }
-
-    /// Dependency-aware emission order:
-    /// If A depends on B, emit B before A. When multiple nodes are available,
-    /// prefer higher score, then lexicographic path.
-    static func orderDependencyAware(_ scored: [ScoredFile]) -> [ScoredFile]  {...}
-
+// PageRank on file dependency graph (A -> B means A depends on B)
+static func pageRank(_ analyzed: [AnalyzedFile],
+damping: Double = 0.85,
+iterations: Int = 20) -> [String: Double] {
+let files: [String] = analyzed.map { $0.file.relativePath }
+let index: [String: Int] = Dictionary(uniqueKeysWithValues: files.enumerated().map { ($1, $0) })
+let n = files.count
+guard n > 0 else { return [:] }
+// Outgoing edges (by index)
+var outEdges: [Set<Int>] = Array(repeating: [], count: n)
+for a in analyzed {
+let i = index[a.file.relativePath]!
+for dep in a.outgoingFileDeps {
+if let j = index[dep] { outEdges[i].insert(j) }
+}
+}
+// Init PR
+var pr = Array(repeating: 1.0 / Double(n), count: n)
+var newPR = Array(repeating: 0.0, count: n)
+let base = (1.0 - damping) / Double(n)
+for _ in 0..<iterations {
+// Distribute rank
+for i in 0..<n { newPR[i] = base }
+for i in 0..<n {
+let outs = outEdges[i]
+if outs.isEmpty {
+// Dangling node: spread evenly
+let share = damping * pr[i] / Double(n)
+for j in 0..<n { newPR[j] += share }
+} else {
+let share = damping * pr[i] / Double(outs.count)
+for j in outs { newPR[j] += share }
+}
+}
+pr = newPR
+}
+// Map back to paths
+var out: [String: Double] = [:]
+for (p, i) in index { out[p] = pr[i] }
+return out
+}
+/// Dependency-aware emission order:
+/// If A depends on B, emit B before A. When multiple nodes are available,
+/// prefer higher score, then lexicographic path.
+static func orderDependencyAware(_ scored: [ScoredFile]) -> [ScoredFile]  {...}
 // END
 FILE: Sources/llminty/Rendering.swift
 import Foundation
 import SwiftParser
 import SwiftSyntax
-
 struct RenderedFile {
-    let relativePath: String
-    let content: String
+let relativePath: String
+let content: String
 }
-
 final class Renderer {
-
-    func render(file: ScoredFile, score: Double) throws -> RenderedFile {
-        switch file.analyzed.file.kind {
-        case .swift:
-            let policy = policyFor(score: score)
-            let content = try renderSwift(text: file.analyzed.text, policy: policy)
-            return RenderedFile(relativePath: file.analyzed.file.relativePath, content: content)
-        case .json:
-            let reduced = JSONReducer.reduceJSONPreservingStructure(text: file.analyzed.text)
-            return RenderedFile(relativePath: file.analyzed.file.relativePath, content: reduced)
-        case .text, .unknown:
-            let compact = compactText(file.analyzed.text)
-            return RenderedFile(relativePath: file.analyzed.file.relativePath, content: compact)
-        case .binary:
-            let size = file.analyzed.file.size
-            let type = (file.analyzed.file.relativePath as NSString).pathExtension.lowercased()
-            let placeholder = "/* binary \(type.isEmpty ? "file" : type) — \(size) bytes (omitted) */\n"
-            return RenderedFile(relativePath: file.analyzed.file.relativePath, content: placeholder)
-        }
-    }
-
-    private func compactText(_ s: String) -> String  {...}
-
-    // Remove trailing spaces; collapse 2+ blank lines to single blank; preserve content
-    private func lightlyCondenseWhitespace(_ s: String) -> String  {...}
-
-    enum SwiftPolicy {
-        case keepAllBodiesLightlyCondensed            // s ≥ 0.75
-        case keepPublicBodiesElideOthers              // 0.50 ≤ s < 0.75
-        case keepOneBodyPerTypeElideRest              // 0.25 ≤ s < 0.50
-        case signaturesOnly                           // s < 0.25
-    }
-
-    func policyFor(score: Double) -> SwiftPolicy  {...}
-
-    func renderSwift(text: String, policy: SwiftPolicy) throws -> String  {...}
+func render(file: ScoredFile, score: Double) throws -> RenderedFile {
+switch file.analyzed.file.kind {
+case .swift:
+let policy = policyFor(score: score)
+let content = try renderSwift(text: file.analyzed.text, policy: policy)
+return RenderedFile(relativePath: file.analyzed.file.relativePath, content: content)
+case .json:
+let reduced = JSONReducer.reduceJSONPreservingStructure(text: file.analyzed.text)
+return RenderedFile(relativePath: file.analyzed.file.relativePath, content: reduced)
+case .text, .unknown:
+let compact = compactText(file.analyzed.text)
+return RenderedFile(relativePath: file.analyzed.file.relativePath, content: compact)
+case .binary:
+let size = file.analyzed.file.size
+let type = (file.analyzed.file.relativePath as NSString).pathExtension.lowercased()
+let placeholder = "/* binary \(type.isEmpty ? "file" : type) — \(size) bytes (omitted) */\n"
+return RenderedFile(relativePath: file.analyzed.file.relativePath, content: placeholder)
+}
+}
+private func compactText(_ s: String) -> String  {...}
+// Remove trailing spaces; collapse 2+ blank lines to single blank; preserve content
+private func lightlyCondenseWhitespace(_ s: String) -> String  {...}
+enum SwiftPolicy {
+case keepAllBodiesLightlyCondensed            // s ≥ 0.75
+case keepPublicBodiesElideOthers              // 0.50 ≤ s < 0.75
+case keepOneBodyPerTypeElideRest              // 0.25 ≤ s < 0.50
+case signaturesOnly                           // s < 0.25
+}
+func policyFor(score: Double) -> SwiftPolicy  {...}
+func renderSwift(text: String, policy: SwiftPolicy) throws -> String  {...}
 ate var typeStack: [String] = []
-    private var plan: UnsafeMutablePointer<ElisionPlan>
-
-    init(plan: inout ElisionPlan) {
-        self.plan = withUnsafeMutablePointer(to: &plan) { $0 }
-        super.init(viewMode: .sourceAccurate)
-    }
-
-    override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    override func visitPost(_ node: StructDeclSyntax)  {...}
-
-    override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    override func visitPost(_ node: ClassDeclSyntax)  {...}
-
-    override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    override func visitPost(_ node: EnumDeclSyntax)  {...}
-
-    override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    override func visitPost(_ node: ProtocolDeclSyntax)  {...}
-
-    override func visit(_ node: FunctionDeclSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    override func visit(_ node: InitializerDeclSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    override func visit(_ node: AccessorDeclSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    override func visit(_ node: SubscriptDeclSyntax) -> SyntaxVisitorContinueKind  {...}
-
-    private func handleBody(body: CodeBlockSyntax, isPublic: Bool)  {...}
-
-    // Simple memoization: one kept body per fully-qualified type name
-    private var kept: Set<String> = []
-    private func seenTypeBody(_ typeName: String) -> Bool  {...}
-
+private var plan: UnsafeMutablePointer<ElisionPlan>
+init(plan: inout ElisionPlan) {
+self.plan = withUnsafeMutablePointer(to: &plan) { $0 }
+super.init(viewMode: .sourceAccurate)
 }
-
+override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visitPost(_ node: StructDeclSyntax)  {...}
+override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visitPost(_ node: ClassDeclSyntax)  {...}
+override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visitPost(_ node: EnumDeclSyntax)  {...}
+override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visitPost(_ node: ProtocolDeclSyntax)  {...}
+override func visit(_ node: FunctionDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visit(_ node: InitializerDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visit(_ node: AccessorDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visit(_ node: SubscriptDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+private func handleBody(body: CodeBlockSyntax, isPublic: Bool)  {...}
+// Simple memoization: one kept body per fully-qualified type name
+private var kept: Set<String> = []
+private func seenTypeBody(_ typeName: String) -> Bool  {...}
+}
 // MARK: - Small helpers
-
 private extension String {
-    func trimRightSpaces() -> String {
-        var s = self
-        while s.last == " " { _ = s.removeLast() }
-        return s
-    }
+func trimRightSpaces() -> String {
+var s = self
+while s.last == " " { _ = s.removeLast() }
+return s
 }
-
+}
 private extension DeclModifierListSyntax {
-    var containsPublicOrOpen: Bool {
-        for m in self {
-            let k = m.name.text
-            if k == "public" || k == "open" { return true }
-        }
-        return false
-    }
+var containsPublicOrOpen: Bool {
+for m in self {
+let k = m.name.text
+if k == "public" || k == "open" { return true }
+}
+return false
+}
 }
 private extension Optional where Wrapped == DeclModifierListSyntax {
-    var containsPublicOrOpen: Bool { self?.containsPublicOrOpen ?? false }
+var containsPublicOrOpen: Bool { self?.containsPublicOrOpen ?? false }
 }
-
 extension StringProtocol {
-    var isNewline: Bool { return self == "\n" || self == "\r\n" }
+var isNewline: Bool { return self == "\n" || self == "\r\n" }
 }
-
 // END
 FILE: Sources/llminty/App.swift
 import Foundation
-
 enum BuiltInExcludes {
-    static func defaultPatterns(outputFileName: String) -> [String]  {...}
-
+static func defaultPatterns(outputFileName: String) -> [String]  {...}
 }
-
+/// Aggressively trims blank lines for final output while keeping exactly one
+/// blank line after each "FILE: " header. Also:
+/// - trims trailing spaces,
+/// - collapses 3+ newlines to 2 during pre-pass,
+/// - removes all other blank-only lines.
+/// Returns a string that always ends with a single trailing newline.
+func postProcessMinty(_ s: String) -> String  {...}
 public struct LLMintyApp {
-    public init()  {...}
-
-    public func run() throws  {...}
-
+public init()  {...}
+public func run() throws  {...}
 }
+// END
+FILE: Tests/LLMintyTests/GraphCentralityTests.swift
 
+import XCTest
+@testable import llminty
+final class GraphCentralityTests: XCTestCase {
+private func analyzed(_ path: String, deps: [String]) -> AnalyzedFile  {...}
+func testDependencyAwareOrder()  {...}
+}
 // END
 FILE: Sources/llminty/main.swift
 import Foundation
-
 // Top-level entrypoint for the executable target.
 // (Do NOT use @main if the module has any other top-level code.)
 do {
-    try LLMintyApp().run()
+try LLMintyApp().run()
 } catch {
-    fputs("llminty: \(error.localizedDescription)\n", stderr)
-    exit(1)
+fputs("llminty: \(error.localizedDescription)\n", stderr)
+exit(1)
 }
+// END
+FILE: Tests/LLMintyTests/SwiftAnalyzerTests.swift
 
+import XCTest
+@testable import llminty
+final class SwiftAnalyzerTests: XCTestCase {
+func testEntrypointPublicAPIAndRefs() throws  {...}
+}
 // END
 FILE: Sources/llminty/JSONReducer.swift
 import Foundation
-
 enum JSONReducer {
-
-    // Head/Tail sample sizes
-    private static let head = 3
-    private static let tail = 2
-    private static let dictKeep = 6
-
-    static func reduceJSONPreservingStructure(text: String) -> String  {...}
-
-    private static func reduce(_ v: Any, seen: Set<ObjectIdentifier>) -> Any  {...}
-
-    private static func reduceArray(_ a: [Any], seen: Set<ObjectIdentifier>) -> Any  {...}
-
-    private static func reduceDict(_ d: [String: Any], seen: Set<ObjectIdentifier>) -> Any  {...}
-
-    private static func stringify(_ v: Any) -> String  {...}
-
-    private static func escape(_ s: String) -> String  {...}
-
+// Head/Tail sample sizes
+private static let head = 3
+private static let tail = 2
+private static let dictKeep = 6
+static func reduceJSONPreservingStructure(text: String) -> String  {...}
+private static func reduce(_ v: Any, seen: Set<ObjectIdentifier>) -> Any  {...}
+private static func reduceArray(_ a: [Any], seen: Set<ObjectIdentifier>) -> Any  {...}
+private static func reduceDict(_ d: [String: Any], seen: Set<ObjectIdentifier>) -> Any  {...}
+private static func stringify(_ v: Any) -> String  {...}
+private static func escape(_ s: String) -> String  {...}
 }
+// END
+FILE: Tests/LLMintyTests/RenderingTests.swift
 
+import XCTest
+@testable import llminty
+final class RenderingTests: XCTestCase {
+func testPolicyForThresholds()  {...}
+func testRenderSwiftElidesNonPublicBodiesUnderPolicy() throws  {...}
+func testRenderTextCompactsWhitespace() throws  {...}
+}
+// END
+FILE: Tests/LLMintyTests/ScoringTests.swift
+
+import XCTest
+@testable import llminty
+final class ScoringTests: XCTestCase {
+func testScoringWeightsAndEntrypointBonus()  {...}
+}
 // END
 FILE: Package.resolved
 {
-  "originHash" : "fafcfb29799827807329c51102552f0f529ef7ef4c8dffc7051b9365efb15aa9",
-  "pins" : [
-    {
-      "identity" : "swift-syntax",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/swiftlang/swift-syntax.git",
-      "state" : {
-        "revision" : "f99ae8aa18f0cf0d53481901f88a0991dc3bd4a2",
-        "version" : "601.0.1"
-      }
-    }
-  ],
-  "version" : 3
+"originHash" : "fafcfb29799827807329c51102552f0f529ef7ef4c8dffc7051b9365efb15aa9",
+"pins" : [
+{
+"identity" : "swift-syntax",
+"kind" : "remoteSourceControl",
+"location" : "https://github.com/swiftlang/swift-syntax.git",
+"state" : {
+"revision" : "f99ae8aa18f0cf0d53481901f88a0991dc3bd4a2",
+"version" : "601.0.1"
 }
-
+}
+],
+"version" : 3
+}
 // END
 FILE: Package.swift
 // swift-tools-version: 6.0
 import PackageDescription
-
 let package = Package(
-    name: "LLMinty",
-    platforms: [
-        .macOS(.v13)
-    ],
-    products: [
-        .executable(name: "llminty", targets: ["llminty"])
-    ],
-    dependencies: [
-        // Match your Swift 6.1 toolchain. 601.x == SwiftSyntax for Swift 6.1
-        .package(url: "https://github.com/swiftlang/swift-syntax.git", exact: "601.0.1")
-    ],
-    targets: [
-        .executableTarget(
-            name: "llminty",
-            dependencies: [
-                .product(name: "SwiftParser", package: "swift-syntax"),
-                .product(name: "SwiftSyntax", package: "swift-syntax")
-            ],
-            path: "Sources/llminty"
-        ),
-        .testTarget(
-            name: "LLMintyTests",
-            dependencies: ["llminty"],
-            path: "Tests/LLMintyTests"
-        )
-    ]
+name: "LLMinty",
+platforms: [
+.macOS(.v13)
+],
+products: [
+.executable(name: "llminty", targets: ["llminty"])
+],
+dependencies: [
+// Match your Swift 6.1 toolchain. 601.x == SwiftSyntax for Swift 6.1
+.package(url: "https://github.com/swiftlang/swift-syntax.git", exact: "601.0.1")
+],
+targets: [
+.executableTarget(
+name: "llminty",
+dependencies: [
+.product(name: "SwiftParser", package: "swift-syntax"),
+.product(name: "SwiftSyntax", package: "swift-syntax")
+],
+path: "Sources/llminty"
+),
+.testTarget(
+name: "LLMintyTests",
+dependencies: ["llminty"],
+path: "Tests/LLMintyTests"
 )
-
+]
+)
 // END
 FILE: README.md
 # LLMinty
-
 Single-command CLI to emit a token-efficient bundle of a Swift repository for LLMs.
-
 - **Command:** `llminty` (no args)
 - **Output:** `./minty.txt`
 - **Ignore file:** `.mintyignore` (gitignore semantics: globs, `!` negation, `/`-anchored, dir `/` suffix, `#` comments)
 - **Deterministic:** Given the same repo & ignore, output is deterministic.
-
 ## Install
-
 ```bash
 git clone <your fork>
 cd LLMinty
 swift build -c release
 cp .build/release/llminty /usr/local/bin/
 ````
-
 > If SwiftSyntax version mismatches your toolchain, pin `swift-syntax` to your local Swift’s compatible tag.
-
 ## Use
-
 ```bash
 cd /path/to/your/swift/repo
 llminty
 # -> prints: Created ./minty.txt (<n> files)
 ```
-
 ```
-
 ---
-
 ### How this satisfies your spec (with your requested customizations)
-
 - **CLI name:** `llminty` (binary); project name **LLMinty**.
 - **Output file:** `minty.txt` (at repo root).
 - **Ignore file:** `.mintyignore` (gitignore semantics, including `!` re‑include and dir patterns).
 - **Built‑in safe excludes:** Implemented in `BuiltInExcludes.swift`, including self‑exclude of `minty.txt`; users can re‑include via negation.
 - **High‑level flow:** Implemented end‑to‑end in `App.run()`.
 - **Ranking (0–1):** Uses AST/graph‑only signals:
-  - Fan‑in and PageRank centrality over file dependency graph (`GraphCentrality`).
-  - Public API surface (public/open, protocols ×2).
-  - Type/protocol influence (inbound refs to declared types).
-  - Complexity via cyclomatic proxies (control‑flow nodes, boolean ops).
-  - Entrypoint indicator (`@main`, SwiftUI `App`, or top‑level code).
+- Fan‑in and PageRank centrality over file dependency graph (`GraphCentrality`).
+- Public API surface (public/open, protocols ×2).
+- Type/protocol influence (inbound refs to declared types).
+- Complexity via cyclomatic proxies (control‑flow nodes, boolean ops).
+- Entrypoint indicator (`@main`, SwiftUI `App`, or top‑level code).
 - **Rendering (token‑minimized):**
-  - **Swift:** Always preserves signatures, generics/where clauses, conformances, access modifiers, and imports. Bodies are retained or elided per score thresholds; very long bodies trimmed in place. One‑body‑per‑type enforced where applicable.
-  - **JSON:** Keeps representative subset, head+tail arrays, with `// trimmed ...` notes; preserves order.
-  - **Other text/binaries:** Condensed or replaced with compact placeholders with type/size.
+- **Swift:** Always preserves signatures, generics/where clauses, conformances, access modifiers, and imports. Bodies are retained or elided per score thresholds; very long bodies trimmed in place. One‑body‑per‑type enforced where applicable.
+- **JSON:** Keeps representative subset, head+tail arrays, with `// trimmed ...` notes; preserves order.
+- **Other text/binaries:** Condensed or replaced with compact placeholders with type/size.
 - **Ordering:** Dependency‑aware topo order; tie‑break by higher score, then stable path.
 - **Deterministic:** Stable scans, stable path sort, deterministic conflict resolution.
 - **Performance:** Directory short‑circuiting; 2 MB per‑file cap; binary detection; no traversal outside CWD.
 - **Security & Safety:** Never leaves working directory; unknown extensions treated as non‑text.
 - **CLI UX:** On success prints **exactly**:
+// END
+FILE: Tests/LLMintyTests/FileScannerTests.swift
+// Tests/LLMintyTests/FileScannerTests.swift
+import XCTest
+@testable import llminty
+final class FileScannerTests: XCTestCase {
+func testScanningKindsAndIgnores() throws  {...}
+}
+// END
+FILE: Tests/LLMintyTests/IgnoreMatcherTests.swift
 
+import XCTest
+@testable import llminty
+final class IgnoreMatcherTests: XCTestCase {
+func testGlobAnchorsAndNegation() throws  {...}
+}
+// END
+FILE: Tests/LLMintyTests/JSONReducerTests.swift
+
+import XCTest
+@testable import llminty
+final class JSONReducerTests: XCTestCase {
+func testArrayAndDictReduction()  {...}
+func testPassThroughOnInvalidJSON()  {...}
+}
 // END
 FILE: Tests/LLMintyTests/LLMintyTests.swift
 
+import XCTest
+@testable import llminty
+final class LLMintyTests: XCTestCase {
+func testEndToEndRunCreatesMintyFile() throws  {...}
+}
 // END
