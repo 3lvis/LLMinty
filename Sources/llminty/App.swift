@@ -39,10 +39,9 @@ func postProcessMinty(_ s: String) -> String {
         .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
 
     // 2) Keep exactly one blank after each header; drop other blank-only lines
-    let lines = pre.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
+    let lines = pre.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" }).map(String.init)
     var result: [String] = []
     result.reserveCapacity(lines.count)
-
     var justSawHeader = false
     for line in lines {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -71,60 +70,62 @@ public struct LLMintyApp {
     public init() {}
 
     public func run() throws {
-        let fm = FileManager.default
-        let root = URL(fileURLWithPath: fm.currentDirectoryPath)
-        let outputURL = root.appendingPathComponent("minty.txt", isDirectory: false)
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let outName = "minty.txt"
 
-        // 1) Establish root; load built-ins; merge `.mintyignore`
-        let builtIns = BuiltInExcludes.defaultPatterns(outputFileName: "minty.txt")
-        let userIgnorePath = root.appendingPathComponent(".mintyignore").path
-        let userPatterns = (try? String(contentsOfFile: userIgnorePath, encoding: .utf8)) ?? ""
-        let matcher = try IgnoreMatcher(
-            builtInPatterns: builtIns,
-            userFileText: userPatterns
-        )
+        // Read user ignore
+        let ignoreURL = cwd.appendingPathComponent(".mintyignore")
+        let userIgnore = (try? String(contentsOf: ignoreURL, encoding: .utf8)) ?? ""
 
-        // 2) Scan files with directory short-circuiting and size caps
-        let scanner = FileScanner(root: root, matcher: matcher)
-        let files = try scanner.scan()
+        // Build matcher
+        let builtIns = BuiltInExcludes.defaultPatterns(outputFileName: outName)
+        let matcher = try IgnoreMatcher(builtInPatterns: builtIns, userFileText: userIgnore)
 
-        // 3) Analyze Swift structure and cross-file references
+        // Scan
+        let scanner = FileScanner(root: cwd, matcher: matcher)
+        let repoFiles = try scanner.scan()
+
+        // Analyze swift files
         let analyzer = SwiftAnalyzer()
-        let analyzed = try analyzer.analyze(files: files)
+        let analyzed = try analyzer.analyze(files: repoFiles)
 
-        // 4) Score each file (0–1)
-        let scorer = Scoring()
-        let scored = scorer.score(analyzed: analyzed)
+        // Score + order
+        let scoring = Scoring()
+        let scored = scoring.score(analyzed: analyzed)
+        let ordered = GraphCentrality.orderDependencyAware(scored)
 
-        // 5) Dependency-aware ordering, tie-break by score then path
-        let ordering = GraphCentrality.orderDependencyAware(scored)
-
-        // 6) Render compact bundle with score-aware retention
+        // Render
         let renderer = Renderer()
-        var renderedFiles = [RenderedFile]()
-        renderedFiles.reserveCapacity(ordering.count)
-        for info in ordering {
-            let rf = try renderer.render(file: info, score: info.score)
-            renderedFiles.append(rf)
+        var rendered: [RenderedFile] = []
+        rendered.reserveCapacity(ordered.count)
+        for s in ordered {
+            let r = try renderer.render(file: s, score: s.score)
+            rendered.append(r)
         }
 
-        // 7) Assemble (original framing)
-        var out = ""
-        out.reserveCapacity(1_000_000)
-        for rf in renderedFiles {
-            out += "FILE: \(rf.relativePath)\n"
-            out += rf.content
-            if !rf.content.hasSuffix("\n") { out += "\n" }
-            out += "// END\n"
+        // Bundle
+        var bundle: [String] = []
+        bundle.reserveCapacity(rendered.count * 2)
+        for r in rendered {
+            bundle.append("FILE: \(r.relativePath)")
+            bundle.append("") // one blank after header
+            bundle.append(r.content.trimRightSpaces())
         }
+        let joined = bundle.joined(separator: "\n")
+        let final = postProcessMinty(joined)
 
-        // 8) NEW: aggressive final compaction
-        let compact = postProcessMinty(out)
+        // Write
+        let outURL = cwd.appendingPathComponent(outName)
+        try final.write(to: outURL, atomically: true, encoding: .utf8)
 
-        // 9) Write output
-        try compact.write(to: outputURL, atomically: true, encoding: .utf8)
+        print("Created ./\(outName) (\(rendered.count) files)")
+    }
+}
 
-        // 10) CLI UX: exact success line
-        print("Created ./minty.txt (\(renderedFiles.count) files)")
+private extension String {
+    func trimRightSpaces() -> String {
+        var s = self
+        while s.last == " " { _ = s.removeLast() }
+        return s
     }
 }

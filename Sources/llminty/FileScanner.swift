@@ -28,10 +28,7 @@ struct FileScanner {
             at: root,
             includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
             options: [.skipsHiddenFiles],
-            errorHandler: { (url, error) -> Bool in
-                // Keep going on errors; this is a read-only pass.
-                return true
-            }
+            errorHandler: { _, _ in true }
         ) else {
             throw NSError(domain: "llminty", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to enumerate directory"])
         }
@@ -39,6 +36,7 @@ struct FileScanner {
         for case let url as URL in enumerator {
             let rel = (url.path).path(replacingBase: root.path)
             let rIsDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+
             if matcher.isIgnored(rel, isDirectory: rIsDir) {
                 if rIsDir { enumerator.skipDescendants() }
                 continue
@@ -57,6 +55,7 @@ struct FileScanner {
                 else if Self.seemsBinary(url: url) { kind = .binary }
                 else { kind = .unknown }
             }
+
             results.append(RepoFile(relativePath: rel, absoluteURL: url, isDirectory: false, kind: kind, size: size))
         }
 
@@ -66,11 +65,25 @@ struct FileScanner {
     }
 
     static func seemsBinary(url: URL) -> Bool {
-        guard let h = try? FileHandle(forReadingFrom: url) else { return false }
-        let data = try? h.read(upToCount: 1024) ?? Data()
-        try? h.close()
+        guard let fh = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? fh.close() }
+
+        let sampleSize = 2048
+        let data = try? fh.read(upToCount: sampleSize)
         guard let d = data, !d.isEmpty else { return false }
-        return d.contains(0) // crude check: any NUL byte
+
+        // Heuristics:
+        // 1) any NUL byte -> binary
+        if d.contains(0) { return true }
+
+        // 2) ratio of non-printable (excluding \t\r\n) too high -> binary
+        var nonPrintable = 0
+        for b in d {
+            if b == 9 || b == 10 || b == 13 { continue } // \t \n \r
+            if b < 32 || b == 127 { nonPrintable += 1 }
+        }
+        let ratio = Double(nonPrintable) / Double(d.count)
+        return ratio > 0.30
     }
 }
 
@@ -80,21 +93,20 @@ private extension String {
         return String(dropFirst(p.count))
     }
 
+    /// Return a relative path string from the absolute root. Normalizes separators and removes leading slash.
     func relativePath(from root: String) -> String {
-        if self == root { return "" }
-        var s = self.removingPrefix(root)
-        if s.hasPrefix("/") { s = String(s.dropFirst()) }
+        var s = self
+        if s.hasPrefix(root) {
+            s = String(s.dropFirst(root.count))
+        }
+        if s.hasPrefix("/") { s.removeFirst() }
         return s
     }
 }
 
 extension String {
+    /// Replace a base prefix with "", returning a normalized relative path (no leading slash).
     func path(replacingBase base: String) -> String {
-        var p = self
-        if p.hasPrefix(base) {
-            p = String(p.dropFirst(base.count))
-            if p.hasPrefix("/") { p = String(p.dropFirst()) }
-        }
-        return p
+        return self.relativePath(from: base)
     }
 }

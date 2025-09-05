@@ -28,76 +28,65 @@ struct AnalyzedFile {
 final class SwiftAnalyzer {
 
     func analyze(files: [RepoFile]) throws -> [AnalyzedFile] {
-        var analyzed: [AnalyzedFile] = []
-        analyzed.reserveCapacity(files.count)
+        // Only consider Swift files for AST-based analysis
+        let swiftFiles = files.filter { $0.kind == .swift }
 
-        for f in files {
-            switch f.kind {
-            case .swift:
-                let text = try String(contentsOf: f.absoluteURL, encoding: .utf8)
-                let base = analyzeSwift(path: f.relativePath, text: text)
-                analyzed.append(base)
-            case .json, .text, .unknown, .binary:
-                // Non-swift placeholders filled later in rendering
-                let text = (try? String(contentsOf: f.absoluteURL, encoding: .utf8)) ?? ""
-                let base = AnalyzedFile(
-                    file: f,
-                    text: text,
-                    declaredTypes: [],
-                    publicAPIScoreRaw: 0,
-                    referencedTypes: [:],
-                    complexity: 0,
-                    isEntrypoint: false,
-                    outgoingFileDeps: [],
-                    inboundRefCount: 0
-                )
-                analyzed.append(base)
-            }
+        // Pass 1: parse and collect per-file signals
+        var analyzed: [AnalyzedFile] = []
+        analyzed.reserveCapacity(swiftFiles.count)
+
+        for f in swiftFiles {
+            let text = (try? String(contentsOf: f.absoluteURL, encoding: .utf8)) ?? ""
+            let a = analyzeSwift(file: f, text: text)
+            analyzed.append(a)
         }
 
-        // Build symbol -> file map (first writer wins in stable path order)
-        var symbolToFile: [String: String] = [:] // typeName -> relativePath
-        for a in analyzed where a.file.kind == .swift {
-            for t in a.declaredTypes.sorted() {
-                if symbolToFile[t] == nil {
-                    symbolToFile[t] = a.file.relativePath
+        // Build type -> filePath index (deterministic: smallest path wins on ties)
+        var typeToFile: [String: String] = [:]
+        for a in analyzed {
+            for t in a.declaredTypes {
+                if let existing = typeToFile[t] {
+                    if a.file.relativePath < existing { typeToFile[t] = a.file.relativePath }
+                } else {
+                    typeToFile[t] = a.file.relativePath
                 }
             }
         }
 
-        // Project cross-file refs: naive map by referenced type names
-        var inbound: [String: Int] = [:]
+        // Pass 2: infer outgoing file deps from referenced types
         for i in 0..<analyzed.count {
-            var deps = Set<String>()
-            for (ref, _) in analyzed[i].referencedTypes {
-                if let defFile = symbolToFile[ref], defFile != analyzed[i].file.relativePath {
-                    deps.insert(defFile)
-                    inbound[defFile, default: 0] += 1
+            var deps: Set<String> = []
+            for (name, _) in analyzed[i].referencedTypes {
+                if let depPath = typeToFile[name], depPath != analyzed[i].file.relativePath {
+                    deps.insert(depPath)
                 }
             }
             analyzed[i].outgoingFileDeps = Array(deps).sorted()
         }
+
+        // Pass 3: inbound ref counts
+        var inbound: [String: Int] = [:]
+        for a in analyzed {
+            for dep in a.outgoingFileDeps {
+                inbound[dep, default: 0] += 1
+            }
+        }
         for i in 0..<analyzed.count {
-            analyzed[i].inboundRefCount = inbound[analyzed[i].file.relativePath, default: 0]
+            analyzed[i].inboundRefCount = inbound[analyzed[i].file.relativePath] ?? 0
         }
 
         return analyzed
     }
 
-    private func analyzeSwift(path: String, text: String) -> AnalyzedFile {
-        let sf = Parser.parse(source: text)
+    private func analyzeSwift(file: RepoFile, text: String) -> AnalyzedFile {
         var ctx = CollectorContext()
+        let tree = Parser.parse(source: text)
         let collector = SwiftCollector(context: &ctx)
-        collector.walk(sf)
+        collector.walk(tree)
 
+        // Entrypoint already computed in collector
         return AnalyzedFile(
-            file: RepoFile(
-                relativePath: path,
-                absoluteURL: URL(fileURLWithPath: path), // not used later
-                isDirectory: false,
-                kind: .swift,
-                size: UInt64(text.utf8.count)
-            ),
+            file: file,
             text: text,
             declaredTypes: ctx.declaredTypes,
             publicAPIScoreRaw: ctx.publicAPIScoreRaw,
@@ -140,13 +129,17 @@ private final class SwiftCollector: SyntaxVisitor {
         let name = node.name.text
         ctx.pointee.declaredTypes.insert(name)
         if node.modifiers.containsPublicOrOpen { ctx.pointee.publicAPIScoreRaw += 1 }
-        if node.inheritanceClauseContains(type: "App") && ctx.pointee.importedModules.contains("SwiftUI") {
+
+        // SwiftUI App?
+        if ctx.pointee.importedModules.contains("SwiftUI"),
+           node.inheritanceClauseContains(type: "App") {
             ctx.pointee.isEntrypoint = true
         }
+
         typeStack.append(name)
         return .visitChildren
     }
-    override func visitPost(_ node: StructDeclSyntax) { _ = typeStack.popLast() }
+    override func visitPost(_ node: StructDeclSyntax)  { _ = typeStack.popLast() }
 
     override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
         let name = node.name.text
@@ -155,7 +148,7 @@ private final class SwiftCollector: SyntaxVisitor {
         typeStack.append(name)
         return .visitChildren
     }
-    override func visitPost(_ node: ClassDeclSyntax) { _ = typeStack.popLast() }
+    override func visitPost(_ node: ClassDeclSyntax)  { _ = typeStack.popLast() }
 
     override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind {
         let name = node.name.text
@@ -164,17 +157,16 @@ private final class SwiftCollector: SyntaxVisitor {
         typeStack.append(name)
         return .visitChildren
     }
-    override func visitPost(_ node: EnumDeclSyntax) { _ = typeStack.popLast() }
+    override func visitPost(_ node: EnumDeclSyntax)  { _ = typeStack.popLast() }
 
     override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind {
         let name = node.name.text
         ctx.pointee.declaredTypes.insert(name)
-        // protocols ×2 if public/open
-        if node.modifiers.containsPublicOrOpen { ctx.pointee.publicAPIScoreRaw += 2 }
+        if node.modifiers.containsPublicOrOpen { ctx.pointee.publicAPIScoreRaw += 2 } // protocols weighted ×2
         typeStack.append(name)
         return .visitChildren
     }
-    override func visitPost(_ node: ProtocolDeclSyntax) { _ = typeStack.popLast() }
+    override func visitPost(_ node: ProtocolDeclSyntax)  { _ = typeStack.popLast() }
 
     override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind {
         if node.attributeName.trimmedDescription == "main" {
@@ -184,17 +176,18 @@ private final class SwiftCollector: SyntaxVisitor {
     }
 
     override func visit(_ node: SourceFileSyntax) -> SyntaxVisitorContinueKind {
-        // Mark entrypoint if any top-level statement is not a declaration
+        // Top-level code heuristic: any non-declaration item at file scope.
+        // CodeBlockItemSyntax.item is `Syntax`. If it's not a DeclSyntax, treat as top-level code.
         for item in node.statements {
-            if !item.item.is(DeclSyntax.self) {
+            if item.item.as(DeclSyntax.self) == nil {
+                // Could be StmtSyntax or ExprSyntax -> treat as top-level code
                 ctx.pointee.hasTopLevelCode = true
                 break
             }
         }
         return .visitChildren
     }
-
-    override func visitPost(_ node: SourceFileSyntax) {
+    override func visitPost(_ node: SourceFileSyntax)  {
         if ctx.pointee.hasTopLevelCode { ctx.pointee.isEntrypoint = true }
     }
 
@@ -218,13 +211,18 @@ private final class SwiftCollector: SyntaxVisitor {
 
     // Complexity: count control-flow tokens and boolean ops
     override func visit(_ token: TokenSyntax) -> SyntaxVisitorContinueKind {
-        switch token.text {
-        case "if", "for", "while", "guard", "repeat", "switch":
-            ctx.pointee.complexity += 1
-        case "&&", "||":
-            ctx.pointee.complexity += 1
+        switch token.tokenKind {
+        case .binaryOperator(let op):
+            if op == "&&" || op == "||" { ctx.pointee.complexity += 1 }
         default:
-            break
+            // Count keywords via token text (robust across SwiftSyntax versions)
+            let t = String(token.text)
+            switch t {
+            case "if", "for", "while", "guard", "case", "repeat", "catch", "switch":
+                ctx.pointee.complexity += 1
+            default:
+                break
+            }
         }
         return .visitChildren
     }
