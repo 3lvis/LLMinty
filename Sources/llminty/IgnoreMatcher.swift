@@ -15,25 +15,27 @@ struct IgnoreMatcher {
 
     init(builtInPatterns: [String], userFileText: String) throws {
         var list: [Pattern] = []
-        for p in builtInPatterns { if let pat = Self.parse(line: p) { list.append(pat) } }
+        for p in builtInPatterns {
+            if let pat = Self.parse(line: p) { list.append(pat) }
+        }
         for line in userFileText.components(separatedBy: .newlines) {
             if let pat = Self.parse(line: line) { list.append(pat) }
         }
         self.ordered = list
     }
 
-    // MARK: - Parse
+    // MARK: - Parser
 
-    /// Parses a single .gitignore-like line into a Pattern. Returns nil for comments/blank lines.
-    private static func parse(line: String) -> Pattern?  {
+    private static func parse(line: String) -> Pattern? {
         var s = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        if s.isEmpty { return nil }
+        guard !s.isEmpty else { return nil }
         if s.hasPrefix("#") { return nil }
 
         var neg = false
-        if s.hasPrefix("!") {
+        if s.first == "!" {
             neg = true
             s.removeFirst()
+            s = s.trimmingCharacters(in: .whitespaces)
         }
 
         var dirOnly = false
@@ -48,104 +50,111 @@ struct IgnoreMatcher {
             s.removeFirst()
         }
 
-        // Collapse multiple slashes and remove leading "./"
-        while s.hasPrefix("./") { s.removeFirst(2) }
-        s = s.replacingOccurrences(of: "//", with: "/")
+        s = s.trimmingCharacters(in: .whitespaces)
+        guard !s.isEmpty else { return nil }
 
-        // Empty after trims is effectively a no-op
-        if s.isEmpty { return nil }
-
+        // Normalize duplicate slashes
         let segs = s.split(separator: "/").map { String($0) }
         return Pattern(negated: neg, dirOnly: dirOnly, anchorRoot: anchorRoot, raw: line, segments: segs)
     }
 
-    // MARK: - Match
+    // MARK: - Eval
 
-    func isIgnored(_ relativePath: String, isDirectory: Bool) -> Bool  {
-        // Normalize path into segments
-        let norm = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\\", with: "/")
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let pathSegs = norm.isEmpty ? [] : norm.split(separator: "/").map(String.init)
+    func isIgnored(_ relativePath: String, isDirectory: Bool) -> Bool {
+        // Normalize path segments (no leading './')
+        let norm = relativePath.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: #"^\.\/"#, with: "", options: .regularExpression)
+        let pathSegs = norm.split(separator: "/").map { String($0) }
 
-        var matched: Bool? = nil
-
+        var ignored = false
         for p in ordered {
             if p.dirOnly && !isDirectory { continue }
-            let ok = Self.match(pattern: p, pathSegments: pathSegs)
-            if ok {
-                // gitignore: last match wins
-                if p.negated { matched = false } else { matched = true }
+            let matched = match(pattern: p, pathSegments: pathSegs)
+            if matched {
+                ignored = !p.negated
             }
         }
-        return matched ?? false
+        return ignored
     }
 
-    private static func match(pattern p: Pattern, pathSegments: [String]) -> Bool  {
-        if p.anchorRoot {
-            return matchFrom(patternSegs: p.segments, pathSegs: pathSegments, startAt: 0)
-        } else {
-            // Try to match starting at any segment boundary
-            if p.segments.first == "**" {
-                // '**' at start already allows shifting inside matchFrom, so just test once
-                return matchFrom(patternSegs: p.segments, pathSegs: pathSegments, startAt: 0)
+    private static func matchSegment(_ pat: String, _ txt: String) -> Bool {
+        // '*' matches any (including empty), '?' matches one (no '/': segments already split)
+        var pi = pat.startIndex
+        var ti = txt.startIndex
+
+        func recurse(_ nextPi: String.Index, _ tFrom: String.Index) -> Bool {
+            var t = tFrom
+            while true {
+                if matchCore(nextPi, t) { return true }
+                if t == txt.endIndex { break }
+                t = txt.index(after: t)
             }
-            if pathSegments.isEmpty {
-                return matchFrom(patternSegs: p.segments, pathSegs: pathSegments, startAt: 0)
-            }
-            for start in 0...max(0, pathSegments.count - 1) {
-                if matchFrom(patternSegs: p.segments, pathSegs: pathSegments, startAt: start) {
-                    return true
+            return false
+        }
+
+        func matchCore(_ pFrom: String.Index, _ tFrom: String.Index) -> Bool {
+            var p = pFrom
+            var t = tFrom
+            while p < pat.endIndex {
+                let ch = pat[p]
+                if ch == "*" {
+                    let afterStar = pat.index(after: p)
+                    if afterStar == pat.endIndex { return true } // trailing *
+                    return recurse(afterStar, t)
+                } else if ch == "?" {
+                    if t == txt.endIndex { return false }
+                    t = txt.index(after: t)
+                    p = pat.index(after: p)
+                } else {
+                    if t == txt.endIndex || txt[t] != ch { return false }
+                    t = txt.index(after: t)
+                    p = pat.index(after: p)
                 }
+            }
+            return t == txt.endIndex
+        }
+
+        return matchCore(pi, ti)
+    }
+
+    private func match(pattern p: Pattern, pathSegments: [String]) -> Bool {
+        if p.anchorRoot {
+            return Self.matchFrom(patternSegs: p.segments, pathSegs: pathSegments, startAt: 0)
+        } else {
+            if p.segments.first == "**" {
+                // '**' at start can match from 0
+                if Self.matchFrom(patternSegs: p.segments, pathSegs: pathSegments, startAt: 0) { return true }
+            }
+            // Try each possible start offset
+            for i in 0...(pathSegments.count) {
+                if Self.matchFrom(patternSegs: p.segments, pathSegs: pathSegments, startAt: i) { return true }
             }
             return false
         }
     }
 
     // '**' matches zero or more segments. '*' matches within a segment (no '/').
-    private static func matchFrom(patternSegs: [String], pathSegs: [String], startAt: Int) -> Bool  {
-        func segMatches(_ p: String, _ s: String) -> Bool {
-            // Simple wildcard matcher with '*' and '?' inside a single segment
-            // Convert to regex safely (escape, then restore wildcards)
-            var rx = ""
-            for ch in p {
-                switch ch {
-                case "*": rx.append(".*")
-                case "?": rx.append(".")
-                default:
-                    // escape regex metachars
-                    let scalars = String(ch).unicodeScalars
-                    if let u = scalars.first, CharacterSet(charactersIn: ".*+?^${}()|[]\\").contains(u) {
-                        rx.append("\\")
-                    }
-                    rx.append(ch)
-                }
-            }
-            return s.range(of: "^" + rx + "$", options: [.regularExpression]) != nil
-        }
-
-        func rec(_ pi: Int, _ si: Int) -> Bool {
+    private static func matchFrom(patternSegs: [String], pathSegs: [String], startAt: Int) -> Bool {
+        func helper(_ pi: Int, _ si: Int) -> Bool {
             if pi == patternSegs.count { return si == pathSegs.count }
-            let pat = patternSegs[pi]
+            let p = patternSegs[pi]
 
-            if pat == "**" {
-                // Try zero or more segments
-                if rec(pi + 1, si) { return true }
-                if si < pathSegs.count {
-                    var k = si
-                    while k < pathSegs.count {
-                        if rec(pi, k + 1) { return true }
-                        k += 1
-                    }
+            if p == "**" {
+                // '**' eats zero..n segments
+                if pi + 1 == patternSegs.count { return true } // trailing '**' matches rest
+                var k = si
+                while k <= pathSegs.count {
+                    if helper(pi + 1, k) { return true }
+                    k += 1
+                }
+                return false
+            } else {
+                if si >= pathSegs.count { return false }
+                if matchSegment(p, pathSegs[si]) {
+                    return helper(pi + 1, si + 1)
                 }
                 return false
             }
-
-            if si >= pathSegs.count { return false }
-            if !segMatches(pat, pathSegs[si]) { return false }
-            return rec(pi + 1, si + 1)
         }
-
-        return rec(0, startAt)
+        return helper(0, startAt)
     }
 }

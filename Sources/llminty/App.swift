@@ -133,7 +133,7 @@ public struct LLMintyApp {
         for s in ordered {
             let rendered = try renderer.render(file: s, score: s.score)
             chunks.append("FILE: \(rendered.relativePath)")
-            chunks.append("") // exactly one blank line after header (will be preserved)
+            chunks.append("") // exactly one blank after header (preserved by postProcess)
             chunks.append(rendered.content.trimmingCharacters(in: .whitespacesAndNewlines))
         }
 

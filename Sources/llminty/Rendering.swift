@@ -24,6 +24,7 @@ final class Renderer {
         case .binary:
             let size = file.analyzed.file.size
             let type = (file.analyzed.file.relativePath as NSString).pathExtension.lowercased()
+            // FIX: no escapes inside interpolation; just use normal literals.
             let placeholder = "/* binary \(type.isEmpty ? "file" : type) — \(size) bytes (omitted) */\n"
             return RenderedFile(relativePath: file.analyzed.file.relativePath, content: placeholder)
         }

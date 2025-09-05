@@ -51,18 +51,16 @@ enum GraphCentrality {
     /// Dependency-aware emission order:
     /// If A depends on B, emit B before A. When multiple nodes are available,
     /// prefer higher score, then lexicographic path.
-    static func orderDependencyAware(_ scored: [ScoredFile]) -> [ScoredFile] {
+    static func orderDependencyAware(_ scored: [ScoredFile]) -> [ScoredFile]  {
         let nodes: [String] = scored.map { $0.analyzed.file.relativePath }
         let idx: [String: Int] = Dictionary(uniqueKeysWithValues: nodes.enumerated().map { ($1, $0) })
 
         // Build graph with edges B -> A if A depends on B
         var inDegree = Array(repeating: 0, count: nodes.count)
         var adj: [Set<Int>] = Array(repeating: [], count: nodes.count)
-
         for (aIndex, s) in scored.enumerated() {
             for depPath in s.analyzed.outgoingFileDeps {
                 if let bIndex = idx[depPath] {
-                    // Edge: dep (B) -> this (A)
                     if !adj[bIndex].contains(aIndex) {
                         adj[bIndex].insert(aIndex)
                         inDegree[aIndex] += 1
@@ -71,16 +69,13 @@ enum GraphCentrality {
             }
         }
 
-        // Min-heap-ish queue by (-score, path) to prefer higher score first among zero in-degree
-        func heapSort(_ arr: [Int]) -> [Int] {
-            return arr.sorted { i, j in
-                let si = scored[i], sj = scored[j]
-                if si.score != sj.score { return si.score > sj.score }
-                return si.analyzed.file.relativePath < sj.analyzed.file.relativePath
-            }
+        func cmp(_ i: Int, _ j: Int) -> Bool {
+            let si = scored[i], sj = scored[j]
+            if si.score != sj.score { return si.score > sj.score }
+            return si.analyzed.file.relativePath < sj.analyzed.file.relativePath
         }
 
-        var queue = heapSort((0..<nodes.count).filter { inDegree[$0] == 0 })
+        var queue = (0..<nodes.count).filter { inDegree[$0] == 0 }.sorted(by: cmp)
         var out: [ScoredFile] = []
 
         while !queue.isEmpty {
@@ -89,12 +84,7 @@ enum GraphCentrality {
             for u in adj[v] {
                 inDegree[u] -= 1
                 if inDegree[u] == 0 {
-                    // insert keeping queue sorted
-                    let pos = queue.firstIndex(where: { i in
-                        let si = scored[u], sj = scored[i]
-                        if si.score != sj.score { return si.score > sj.score }
-                        return si.analyzed.file.relativePath < sj.analyzed.file.relativePath
-                    }) ?? queue.endIndex
+                    let pos = queue.firstIndex(where: { !cmp(u, $0) }) ?? queue.endIndex
                     queue.insert(u, at: pos)
                 }
             }
