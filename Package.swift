@@ -25,7 +25,10 @@ let package = Package(
         .testTarget(
             name: "LLMintyTests",
             dependencies: ["llminty"],
-            path: "Tests/LLMintyTests"
+            path: "Tests/LLMintyTests",
+            resources: [
+                .copy("Fixtures")
+            ]
         )
     ]
 )
