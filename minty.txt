@@ -11,14 +11,7 @@ let raw: String
 let segments: [String] // split on '/'
 }
 private let ordered: [Pattern]
-init(builtInPatterns: [String], userFileText: String) throws {
-var list: [Pattern] = []
-for p in builtInPatterns { if let pat = Self.parse(line: p) { list.append(pat) } }
-for line in userFileText.components(separatedBy: .newlines) {
-if let pat = Self.parse(line: line) { list.append(pat) }
-}
-self.ordered = list
-}
+init(builtInPatterns: [String], userFileText: String) throws  {...}
 private static func parse(line: String) -> Pattern?  {...}
 func isIgnored(_ relativePath: String, isDirectory: Bool) -> Bool  {...}
 private static func match(pattern p: Pattern, pathSegments: [String]) -> Bool  {...}
@@ -43,53 +36,11 @@ static let maxFileBytes: UInt64 = 2 * 1024 * 1024 // 2 MB per file cap
 struct FileScanner {
 let root: URL
 let matcher: IgnoreMatcher
-func scan() throws -> [RepoFile] {
-var results: [RepoFile] = []
-let fm = FileManager.default
-guard let enumerator = fm.enumerator(
-at: root,
-includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
-options: [.skipsHiddenFiles],
-errorHandler: { (url, error) -> Bool in
-// Keep going on errors; this is a read-only pass.
-return true
-}
-) else {
-throw NSError(domain: "llminty", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to enumerate directory"])
-}
-for case let url as URL in enumerator {
-let rel = (url.path).path(replacingBase: root.path)
-let rIsDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-if matcher.isIgnored(rel, isDirectory: rIsDir) {
-if rIsDir { enumerator.skipDescendants() }
-continue
-}
-if rIsDir { continue }
-let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { UInt64($0) } ?? 0
-let ext = url.pathExtension.lowercased()
-let kind: FileKind
-switch ext {
-case "swift": kind = .swift
-case "json":  kind = .json
-case "md", "yml", "yaml", "xml", "plist", "txt", "sh", "toml": kind = .text
-default:
-if size > ScanLimits.maxFileBytes { kind = .binary }
-else if Self.seemsBinary(url: url) { kind = .binary }
-else { kind = .unknown }
-}
-results.append(RepoFile(relativePath: rel, absoluteURL: url, isDirectory: false, kind: kind, size: size))
-}
-// Deterministic stable path sort
-results.sort { $0.relativePath < $1.relativePath }
-return results
-}
+func scan() throws -> [RepoFile]  {...}
 static func seemsBinary(url: URL) -> Bool  {...}
 }
 private extension String {
-func removingPrefix(_ p: String) -> String {
-guard hasPrefix(p) else { return self }
-return String(dropFirst(p.count))
-}
+func removingPrefix(_ p: String) -> String  {...}
 func relativePath(from root: String) -> String  {...}
 }
 extension String {
@@ -192,54 +143,7 @@ var complexityMax = 0
 /// Compute a composite [0,1] score for each file.
 /// Heuristics balance inbound references, PageRank, public API surface, "influence"
 /// (outgoing refs) and measured complexity; + entrypoint bonus.
-func score(analyzed: [AnalyzedFile]) -> [ScoredFile] {
-// Precompute PR and fan-in
-let pr = GraphCentrality.pageRank(analyzed)
-var fanIn: [String: Int] = [:]
-for a in analyzed {
-fanIn[a.file.relativePath] = a.inboundRefCount
-}
-// Collect maxima for normalization
-var norm = Norm()
-for a in analyzed {
-norm.fanInMax = max(norm.fanInMax, fanIn[a.file.relativePath] ?? 0)
-norm.pageRankMax = max(norm.pageRankMax, pr[a.file.relativePath] ?? 0.0)
-norm.apiMax = max(norm.apiMax, a.publicAPIScoreRaw)
-// "Influence": number of distinct outgoing file deps (fan-out)
-norm.influenceMax = max(norm.influenceMax, a.outgoingFileDeps.count)
-norm.complexityMax = max(norm.complexityMax, a.complexity)
-}
-// Safe division
-func nzDiv(_ num: Double, by den: Double) -> Double  {...}
-var out: [ScoredFile] = []
-out.reserveCapacity(analyzed.count)
-for a in analyzed {
-let fanInN   = nzDiv(Double(fanIn[a.file.relativePath] ?? 0), by: Double(norm.fanInMax))
-let prN      = nzDiv(pr[a.file.relativePath] ?? 0.0, by: norm.pageRankMax)
-let apiN     = nzDiv(Double(a.publicAPIScoreRaw), by: Double(norm.apiMax))
-let inflN    = nzDiv(Double(a.outgoingFileDeps.count), by: Double(norm.influenceMax))
-let cxN      = nzDiv(Double(a.complexity), by: Double(norm.complexityMax))
-let entry    = a.isEntrypoint ? 1.0 : 0.0
-// Weights: 5 equally weighted primary signals + entrypoint bonus
-let score =
-0.18 * fanInN +
-0.18 * prN +
-0.18 * apiN +
-0.18 * inflN +
-0.18 * cxN +
-0.10 * entry
-out.append(
-ScoredFile(
-analyzed: a,
-score: max(0.0, min(1.0, score)),
-fanIn: fanIn[a.file.relativePath] ?? 0,
-pageRank: pr[a.file.relativePath] ?? 0.0
-)
-)
-}
-return out
-}
-}
+func score(analyzed: [AnalyzedFile]) -> [ScoredFile]  {...}
 // END
 FILE: Sources/llminty/GraphCentrality.swift
 import Foundation
@@ -290,6 +194,75 @@ return out
 /// prefer higher score, then lexicographic path.
 static func orderDependencyAware(_ scored: [ScoredFile]) -> [ScoredFile]  {...}
 // END
+FILE: Sources/llminty/App.swift
+import Foundation
+enum BuiltInExcludes {
+static func defaultPatterns(outputFileName: String) -> [String] {
+// Users can re-include via .mintyignore negation (!)
+return [
+// VCS / editor
+".git/", ".gitignore", ".gitattributes", ".DS_Store", ".idea/", ".vscode/", ".svn/", ".hg/",
+// SwiftPM
+".build/", ".swiftpm/",
+// Xcode
+"DerivedData/", "*.xcodeproj/", "*.xcworkspace/", "xcuserdata/",
+// Apple bundles/outputs
+"*.app/", "*.appex/", "*.framework/", "*.dSYM/", "*.xcarchive/",
+// Dependency managers
+"Pods/", "Carthage/",
+// Assets / binary noise (wide net by default)
+"*.xcassets/", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.heic", "*.pdf",
+"*.svg", "*.webp", "*.ttf", "*.otf", "*.woff", "*.woff2",
+"*.zip", "*.tar", "*.tar.gz", "*.rar", "*.7z",
+"*.mp3", "*.wav", "*.aiff", "*.m4a", "*.mp4", "*.mov",
+"*.bin", "*.dat",
+// Self-exclude
+outputFileName
+]
+}
+}
+/// Aggressively trims blank lines for final output while keeping exactly one
+/// blank line after each "FILE: " header. Also:
+/// - trims trailing spaces,
+/// - collapses 3+ newlines to 2 during pre-pass,
+/// - removes all other blank-only lines.
+/// Returns a string that always ends with a single trailing newline.
+func postProcessMinty(_ s: String) -> String {
+// 1) Trim trailing spaces and collapse extreme newline runs
+let pre = s
+.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression)
+.replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
+// 2) Keep exactly one blank after each header; drop other blank-only lines
+let lines = pre.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
+var result: [String] = []
+result.reserveCapacity(lines.count)
+var justSawHeader = false
+for line in lines {
+let trimmed = line.trimmingCharacters(in: .whitespaces)
+if line.hasPrefix("FILE: ") {
+result.append(trimmed)       // store header without trailing spaces
+justSawHeader = true
+continue
+}
+if trimmed.isEmpty {
+if justSawHeader {
+result.append("")        // keep one blank after the header
+}
+// else: drop blank line
+} else {
+result.append(trimmed)       // keep non-blank (trimmed right/left)
+justSawHeader = false
+}
+}
+// 3) Single trailing newline
+let joined = result.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+return joined + "\n"
+}
+public struct LLMintyApp {
+public init() {}
+public func run() throws  {...}
+}
+// END
 FILE: Sources/llminty/Rendering.swift
 import Foundation
 import SwiftParser
@@ -327,6 +300,7 @@ case keepPublicBodiesElideOthers              // 0.50 ≤ s < 0.75
 case keepOneBodyPerTypeElideRest              // 0.25 ≤ s < 0.50
 case signaturesOnly                           // s < 0.25
 }
+// In Sources/llminty/Rendering.swift
 func policyFor(score: Double) -> SwiftPolicy  {...}
 func renderSwift(text: String, policy: SwiftPolicy) throws -> String  {...}
 ate var typeStack: [String] = []
@@ -376,29 +350,24 @@ extension StringProtocol {
 var isNewline: Bool { return self == "\n" || self == "\r\n" }
 }
 // END
-FILE: Sources/llminty/App.swift
-import Foundation
-enum BuiltInExcludes {
-static func defaultPatterns(outputFileName: String) -> [String]  {...}
-}
-/// Aggressively trims blank lines for final output while keeping exactly one
-/// blank line after each "FILE: " header. Also:
-/// - trims trailing spaces,
-/// - collapses 3+ newlines to 2 during pre-pass,
-/// - removes all other blank-only lines.
-/// Returns a string that always ends with a single trailing newline.
-func postProcessMinty(_ s: String) -> String  {...}
-public struct LLMintyApp {
-public init()  {...}
-public func run() throws  {...}
-}
-// END
 FILE: Tests/LLMintyTests/GraphCentralityTests.swift
 
 import XCTest
 @testable import llminty
 final class GraphCentralityTests: XCTestCase {
-private func analyzed(_ path: String, deps: [String]) -> AnalyzedFile  {...}
+private func analyzed(_ path: String, deps: [String]) -> AnalyzedFile {
+return AnalyzedFile(
+file: RepoFile(relativePath: path, absoluteURL: URL(fileURLWithPath: "/dev/null"), isDirectory: false, kind: .swift, size: 0),
+text: "",
+declaredTypes: [],
+publicAPIScoreRaw: 0,
+referencedTypes: [:],
+complexity: 0,
+isEntrypoint: false,
+outgoingFileDeps: deps,
+inboundRefCount: 0
+)
+}
 func testDependencyAwareOrder()  {...}
 }
 // END
@@ -436,11 +405,23 @@ private static func stringify(_ v: Any) -> String  {...}
 private static func escape(_ s: String) -> String  {...}
 }
 // END
+FILE: Tests/LLMintyTests/LLMintyTests.swift
+import XCTest
+@testable import llminty
+final class LLMintyTests: XCTestCase {
+// End-to-end: builds a mini project, runs the app, checks minty.txt framing and ignore behavior.
+func testEndToEndRunCreatesMintyFile() throws  {...}
+// Compaction policy: keep exactly one blank line after each FILE header, drop others,
+// but allow a single terminal blank line (trailing newline in the file).
+func testKeepsOneBlankAfterHeadersAndDropsOthers()  {...}
+}
+// END
 FILE: Tests/LLMintyTests/RenderingTests.swift
 
 import XCTest
 @testable import llminty
 final class RenderingTests: XCTestCase {
+// In Tests/LLMintyTests/RenderingTests.swift
 func testPolicyForThresholds()  {...}
 func testRenderSwiftElidesNonPublicBodiesUnderPolicy() throws  {...}
 func testRenderTextCompactsWhitespace() throws  {...}
@@ -571,13 +552,5 @@ import XCTest
 final class JSONReducerTests: XCTestCase {
 func testArrayAndDictReduction()  {...}
 func testPassThroughOnInvalidJSON()  {...}
-}
-// END
-FILE: Tests/LLMintyTests/LLMintyTests.swift
-
-import XCTest
-@testable import llminty
-final class LLMintyTests: XCTestCase {
-func testEndToEndRunCreatesMintyFile() throws  {...}
 }
 // END

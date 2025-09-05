@@ -1,10 +1,10 @@
-
 import XCTest
 @testable import llminty
 
 final class RenderingTests: XCTestCase {
     func testPolicyForThresholds() {
         let r = Renderer()
+        // Original thresholds
         XCTAssertEqual(r.policyFor(score: 0.80), .keepAllBodiesLightlyCondensed)
         XCTAssertEqual(r.policyFor(score: 0.60), .keepPublicBodiesElideOthers)
         XCTAssertEqual(r.policyFor(score: 0.30), .keepOneBodyPerTypeElideRest)
@@ -12,27 +12,43 @@ final class RenderingTests: XCTestCase {
     }
 
     func testRenderSwiftElidesNonPublicBodiesUnderPolicy() throws {
+        // Make internal body long enough so it is NOT considered "short".
         let swift = """
         public struct S {
             public init() {}
             public func pub() { let x = 1; print(x) }
-            func internalOne() { print("x") }
+            func internalOne() {
+                let a = 1
+                let b = 2
+                let c = a + b
+                print(c)
+                if a < b {
+                    for _ in 0..<1 {
+                        print("loop")
+                    }
+                }
+                print("tail")
+            }
         }
         """
         let r = Renderer()
-        // Force policy that elides non-public bodies
         let content = try r.renderSwift(text: swift, policy: .keepPublicBodiesElideOthers)
+
         XCTAssertTrue(content.contains("public func pub()"))
         XCTAssertTrue(content.contains("func internalOne()"))
-        // internal function body should be replaced with an elision token
+
+        // Internal function body should be replaced with an elision token
         XCTAssertTrue(content.contains("internalOne()") && (content.contains("{...}") || content.contains("{ ... }")))
     }
 
     func testRenderTextCompactsWhitespace() throws {
         let rf = AnalyzedFile(
-            file: RepoFile(relativePath: "Notes.txt", absoluteURL: URL(fileURLWithPath: "/dev/null"), isDirectory: false, kind: .text, size: 0),
+            file: RepoFile(relativePath: "Notes.txt",
+                           absoluteURL: URL(fileURLWithPath: "/dev/null"),
+                           isDirectory: false, kind: .text, size: 0),
             text: "a\n\n\n b\n",
-            declaredTypes: [], publicAPIScoreRaw: 0, referencedTypes: [:], complexity: 0, isEntrypoint: false, outgoingFileDeps: [], inboundRefCount: 0
+            declaredTypes: [], publicAPIScoreRaw: 0, referencedTypes: [:],
+            complexity: 0, isEntrypoint: false, outgoingFileDeps: [], inboundRefCount: 0
         )
         let s = ScoredFile(analyzed: rf, score: 0.1, fanIn: 0, pageRank: 0.0)
         let out = try Renderer().render(file: s, score: s.score).content
