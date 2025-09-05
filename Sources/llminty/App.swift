@@ -51,10 +51,7 @@ func postProcessMinty(_ s: String) -> String {
             continue
         }
         if trimmed.isEmpty {
-            if justSawHeader {
-                result.append("")        // keep one blank after the header
-            }
-            // else: drop blank line
+            if justSawHeader { result.append("") } // keep one blank after the header
         } else {
             result.append(trimmed)       // keep non-blank (trimmed right/left)
             justSawHeader = false
@@ -72,77 +69,44 @@ public struct LLMintyApp {
     public func run() throws  {
         let fm = FileManager.default
         let root = URL(fileURLWithPath: fm.currentDirectoryPath)
+        let ignorePath = root.appendingPathComponent(".mintyignore").path
 
-        // Read .mintyignore if present
-        let ignoreURL = root.appendingPathComponent(".mintyignore")
-        let userIgnore = (try? String(contentsOf: ignoreURL, encoding: .utf8)) ?? ""
+        // Read user ignore file (optional)
+        let ignoreText = (try? String(contentsOfFile: ignorePath, encoding: .utf8)) ?? ""
 
+        // Build matcher with built-ins first
         let matcher = try IgnoreMatcher(
             builtInPatterns: BuiltInExcludes.defaultPatterns(outputFileName: "minty.txt"),
-            userFileText: userIgnore
+            userFileText: ignoreText
         )
 
         // Scan
         let scanner = FileScanner(root: root, matcher: matcher)
         let files = try scanner.scan()
 
-        // Analyze Swift files
+        // Analyze/score/order
         let analyzer = SwiftAnalyzer()
-        let analyzedSwift = try analyzer.analyze(files: files)
-        var analyzedByPath: [String: AnalyzedFile] = Dictionary(
-            uniqueKeysWithValues: analyzedSwift.map { ($0.file.relativePath, $0) }
-        )
-
-        // Create stub analyzed entries for non-swift files (so we can score/order deterministically)
-        for f in files where analyzedByPath[f.relativePath] == nil {
-            let text: String
-            switch f.kind {
-            case .json, .text, .unknown:
-                text = (try? String(contentsOf: f.absoluteURL, encoding: .utf8)) ?? ""
-            case .binary:
-                text = ""
-            case .swift:
-                text = "" // already analyzed above
-            }
-            analyzedByPath[f.relativePath] = AnalyzedFile(
-                file: f,
-                text: text,
-                declaredTypes: [],
-                publicAPIScoreRaw: 0,
-                referencedTypes: [:],
-                complexity: 0,
-                isEntrypoint: false,
-                outgoingFileDeps: [],
-                inboundRefCount: 0
-            )
-        }
-
-        // Score
-        let allAnalyzed = files.compactMap { analyzedByPath[$0.relativePath] }
+        let analyzed = try analyzer.analyze(files: files)
         let scorer = Scoring()
-        let scored = scorer.score(analyzed: allAnalyzed)
-
-        // Order (dependency-aware)
+        let scored = scorer.score(analyzed: analyzed)
         let ordered = GraphCentrality.orderDependencyAware(scored)
 
         // Render
         let renderer = Renderer()
-        var chunks: [String] = []
-        chunks.reserveCapacity(ordered.count * 4)
-
+        var parts: [String] = []
+        parts.reserveCapacity(ordered.count * 2)
         for s in ordered {
-            let rendered = try renderer.render(file: s, score: s.score)
-            chunks.append("FILE: \(rendered.relativePath)")
-            chunks.append("") // exactly one blank after header (preserved by postProcess)
-            chunks.append(rendered.content.trimmingCharacters(in: .whitespacesAndNewlines))
+            let rf = try renderer.render(file: s, score: s.score)
+            parts.append("FILE: \(rf.relativePath)")
+            parts.append("")
+            parts.append(rf.content.trimmingCharacters(in: .whitespacesAndNewlines))
         }
+        let joined = parts.joined(separator: "\n")
+        let finalText = postProcessMinty(joined)
 
-        let raw = chunks.joined(separator: "\n") + "\n"
-        let post = postProcessMinty(raw)
-
-        // Write
+        // Write minty.txt
         let outURL = root.appendingPathComponent("minty.txt")
-        try post.write(to: outURL, atomically: true, encoding: .utf8)
+        try finalText.data(using: .utf8)?.write(to: outURL, options: [.atomic])
 
         // Success message (exact)
         print("Created ./minty.txt (\(ordered.count) files)")

@@ -66,29 +66,20 @@ struct FileScanner {
     }
 
     static func seemsBinary(url: URL) -> Bool {
-        // Read a small prefix and check for NULs or a high ratio of non-text bytes.
-        let chunk = 4096
-        guard let fh = try? FileHandle(forReadingFrom: url) else { return false }
-        defer { try? fh.close() }
-        let data = try? fh.read(upToCount: chunk)
-        guard let d = data, !d.isEmpty else { return false }
-
-        var nul = 0
-        var nonTextish = 0
-        for b in d {
-            if b == 0 { nul += 1 }
-            // ASCII control chars except \t \n \r
-            if (b < 32 && b != 9 && b != 10 && b != 13) || b == 0x7F {
-                nonTextish += 1
-            }
-        }
-        if nul > 0 { return true }
-        return Double(nonTextish) / Double(d.count) > 0.3
+        guard let h = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? h.close() }
+        let data = try? h.read(upToCount: 8192) ?? Data()
+        guard let bytes = data, !bytes.isEmpty else { return false }
+        if bytes.contains(0) { return true }
+        // Try UTF-8 decode conservatively
+        if String(data: bytes, encoding: .utf8) != nil { return false }
+        // Heuristic: too many high bytes
+        let high = bytes.filter { $0 < 9 || ($0 > 13 && $0 < 32) }.count
+        return Double(high) / Double(bytes.count) > 0.05
     }
 }
 
 // MARK: - Path helpers
-
 private extension String {
     func removingPrefix(_ p: String) -> String {
         guard hasPrefix(p) else { return self }
@@ -96,19 +87,16 @@ private extension String {
     }
 
     func relativePath(from root: String) -> String {
-        let stdSelf = self
-        if stdSelf.hasPrefix(root) {
-            var rel = String(stdSelf.dropFirst(root.count))
-            if rel.hasPrefix("/") { rel.removeFirst() }
-            return rel
-        }
-        return stdSelf
+        let normRoot = root.hasSuffix("/") ? root : root + "/"
+        if self == root { return "" }
+        if hasPrefix(normRoot) { return String(dropFirst(normRoot.count)) }
+        return self
     }
 }
 
 extension String {
     func path(replacingBase base: String) -> String {
-        let rel = self.relativePath(from: base)
-        return rel
+        // Normalize both to real paths (no trailing slash behavior)
+        return (self as NSString).standardizingPath.relativePath(from: (base as NSString).standardizingPath)
     }
 }

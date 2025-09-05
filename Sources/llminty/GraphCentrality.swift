@@ -69,13 +69,16 @@ enum GraphCentrality {
             }
         }
 
-        func cmp(_ i: Int, _ j: Int) -> Bool {
-            let si = scored[i], sj = scored[j]
-            if si.score != sj.score { return si.score > sj.score }
-            return si.analyzed.file.relativePath < sj.analyzed.file.relativePath
+        // Priority among zero in-degree: higher score first, then lexicographic path
+        func sortedQueue(_ arr: [Int]) -> [Int] {
+            return arr.sorted { i, j in
+                let si = scored[i], sj = scored[j]
+                if si.score != sj.score { return si.score > sj.score }
+                return si.analyzed.file.relativePath < sj.analyzed.file.relativePath
+            }
         }
 
-        var queue = (0..<nodes.count).filter { inDegree[$0] == 0 }.sorted(by: cmp)
+        var queue = sortedQueue((0..<nodes.count).filter { inDegree[$0] == 0 })
         var out: [ScoredFile] = []
 
         while !queue.isEmpty {
@@ -84,7 +87,12 @@ enum GraphCentrality {
             for u in adj[v] {
                 inDegree[u] -= 1
                 if inDegree[u] == 0 {
-                    let pos = queue.firstIndex(where: { !cmp(u, $0) }) ?? queue.endIndex
+                    // Insert in sorted position
+                    let pos = queue.firstIndex(where: { i in
+                        let si = scored[u], sj = scored[i]
+                        if si.score != sj.score { return si.score > sj.score }
+                        return si.analyzed.file.relativePath < sj.analyzed.file.relativePath
+                    }) ?? queue.endIndex
                     queue.insert(u, at: pos)
                 }
             }

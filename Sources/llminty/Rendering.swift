@@ -24,7 +24,6 @@ final class Renderer {
         case .binary:
             let size = file.analyzed.file.size
             let type = (file.analyzed.file.relativePath as NSString).pathExtension.lowercased()
-            // FIX: no escapes inside interpolation; just use normal literals.
             let placeholder = "/* binary \(type.isEmpty ? "file" : type) — \(size) bytes (omitted) */\n"
             return RenderedFile(relativePath: file.analyzed.file.relativePath, content: placeholder)
         }
@@ -33,9 +32,9 @@ final class Renderer {
     // MARK: - Text compaction
 
     /// For .text / .unknown: trim trailing spaces per line, collapse runs of blank lines to a single blank.
-    private func compactText(_ s: String) -> String {
+    private func compactText(_ s: String) -> String  {
         var out: [String] = []
-        out.reserveCapacity(max(1, s.count / 24))
+        out.reserveCapacity(s.count / 24)
         var lastBlank = false
         for raw in s.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             var line = String(raw)
@@ -53,7 +52,7 @@ final class Renderer {
     }
 
     /// For Swift bodies: a gentle pass that trims trailing spaces and collapses 3+ blank lines to 2.
-    private func lightlyCondenseWhitespace(_ s: String) -> String {
+    private func lightlyCondenseWhitespace(_ s: String) -> String  {
         let trimmedRight = s.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression, range: nil)
         return trimmedRight.replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression, range: nil)
     }
@@ -67,7 +66,7 @@ final class Renderer {
         case signaturesOnly                           // s < 0.25
     }
 
-    func policyFor(score: Double) -> SwiftPolicy {
+    func policyFor(score: Double) -> SwiftPolicy  {
         if score >= 0.75 { return .keepAllBodiesLightlyCondensed }
         if score >= 0.50 { return .keepPublicBodiesElideOthers }
         if score >= 0.25 { return .keepOneBodyPerTypeElideRest }
@@ -76,128 +75,116 @@ final class Renderer {
 
     // MARK: - Swift rendering (mechanical, deterministic elision)
 
-    /// Mechanically elide Swift function/initializer bodies according to policy.
-    /// Uses SwiftSyntax positions to replace bodies in the original source, so signatures remain intact.
-    func renderSwift(text: String, policy: SwiftPolicy) throws -> String {
-        if case .keepAllBodiesLightlyCondensed = policy {
+    /// Mechanically elide Swift function/initializer/subscript bodies according to policy.
+    /// Uses SwiftSyntax rewriting to preserve signatures verbatim.
+    func renderSwift(text: String, policy: SwiftPolicy) throws -> String  {
+        if policy == .keepAllBodiesLightlyCondensed {
             return lightlyCondenseWhitespace(text)
         }
 
-        struct Replace {
-            let startUTF8: Int // utf8 offset at '{'
-            let endUTF8: Int   // utf8 offset *after* '}'
-        }
+        final class Elider: SyntaxRewriter {
+            let policy: Renderer.SwiftPolicy
+            var typeStack: [String] = []
+            var kept: Set<String> = [] // one kept body per fully-qualified type
 
-        final class Planner: SyntaxVisitor {
-            let policy: SwiftPolicy
-            var replaces: [Replace] = []
-
-            // type stack for one-per-type policy
-            private var typeStack: [String] = []
-            private var keptByType: Set<String> = []
-
-            init(policy: SwiftPolicy) {
+            init(policy: Renderer.SwiftPolicy) {
                 self.policy = policy
                 super.init(viewMode: .sourceAccurate)
             }
 
-            private func currentTypeKey() -> String {
-                return typeStack.isEmpty ? "<top>" : typeStack.joined(separator: ".")
+            private func fqType() -> String? {
+                guard !typeStack.isEmpty else { return nil }
+                return typeStack.joined(separator: ".")
             }
 
-            private func isPublic(_ mods: DeclModifierListSyntax?) -> Bool {
-                guard let mods = mods else { return false }
-                for m in mods {
-                    let k = m.name.text
-                    if k == "public" || k == "open" { return true }
-                }
-                return false
-            }
-
-            private func shouldElide(isPublic: Bool) -> Bool {
+            private func shouldKeepBody(isPublic: Bool) -> Bool {
                 switch policy {
                 case .signaturesOnly:
+                    return false
+                case .keepOneBodyPerTypeElideRest:
+                    guard let fq = fqType() else { return false }
+                    if kept.contains(fq) { return false }
+                    kept.insert(fq)
                     return true
                 case .keepPublicBodiesElideOthers:
-                    return !isPublic
-                case .keepOneBodyPerTypeElideRest:
-                    let key = currentTypeKey()
-                    if keptByType.contains(key) { return true }
-                    keptByType.insert(key)
-                    return false
+                    return isPublic
                 case .keepAllBodiesLightlyCondensed:
-                    return false
+                    return true
                 }
             }
 
-            // Track types
-            override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
-                typeStack.append(node.name.text)
-                return .visitChildren
+            private func emptyBlock() -> CodeBlockSyntax {
+                CodeBlockSyntax(
+                    leftBrace: .leftBraceToken(leadingTrivia: .space, trailingTrivia: .space),
+                    statements: CodeBlockItemListSyntax([]),
+                    rightBrace: .rightBraceToken(trailingTrivia: .newline)
+                )
             }
-            override func visitPost(_ node: StructDeclSyntax) { _ = typeStack.popLast() }
 
-            override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
+            // Type entries
+            override func visit(_ node: StructDeclSyntax) -> DeclSyntax {
                 typeStack.append(node.name.text)
-                return .visitChildren
+                let visited = super.visit(node)
+                _ = typeStack.popLast()
+                return visited
             }
-            override func visitPost(_ node: ClassDeclSyntax) { _ = typeStack.popLast() }
-
-            override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind {
+            override func visit(_ node: ClassDeclSyntax) -> DeclSyntax {
                 typeStack.append(node.name.text)
-                return .visitChildren
+                let visited = super.visit(node)
+                _ = typeStack.popLast()
+                return visited
             }
-            override func visitPost(_ node: EnumDeclSyntax) { _ = typeStack.popLast() }
+            override func visit(_ node: EnumDeclSyntax) -> DeclSyntax {
+                typeStack.append(node.name.text)
+                let visited = super.visit(node)
+                _ = typeStack.popLast()
+                return visited
+            }
+            override func visit(_ node: ProtocolDeclSyntax) -> DeclSyntax {
+                typeStack.append(node.name.text)
+                let visited = super.visit(node)
+                _ = typeStack.popLast()
+                return visited
+            }
 
             // Functions
-            override func visit(_ node: FunctionDeclSyntax) -> SyntaxVisitorContinueKind {
-                guard let body = node.body else { return .skipChildren }
-                let pub = isPublic(node.modifiers)
-                if shouldElide(isPublic: pub) {
-                    let start = body.leftBrace.position.utf8Offset
-                    let end = body.rightBrace.endPosition.utf8Offset
-                    replaces.append(Replace(startUTF8: start, endUTF8: end))
-                }
-                return .skipChildren
+            override func visit(_ node: FunctionDeclSyntax) -> DeclSyntax {
+                guard let body = node.body else { return DeclSyntax(node) }
+                let isPublic = node.modifiers.containsPublicOrOpen
+                if shouldKeepBody(isPublic: isPublic) { return DeclSyntax(node) }
+                let replaced = node.with(\.body, emptyBlock())
+                return DeclSyntax(replaced)
             }
 
             // Inits
-            override func visit(_ node: InitializerDeclSyntax) -> SyntaxVisitorContinueKind {
-                guard let body = node.body else { return .skipChildren }
-                let pub = isPublic(node.modifiers)
-                if shouldElide(isPublic: pub) {
-                    let start = body.leftBrace.position.utf8Offset
-                    let end = body.rightBrace.endPosition.utf8Offset
-                    replaces.append(Replace(startUTF8: start, endUTF8: end))
+            override func visit(_ node: InitializerDeclSyntax) -> DeclSyntax {
+                guard let body = node.body else { return DeclSyntax(node) }
+                _ = body // silence unused if optimization elides call
+                let isPublic = node.modifiers.containsPublicOrOpen
+                if shouldKeepBody(isPublic: isPublic) { return DeclSyntax(node) }
+                let replaced = node.with(\.body, emptyBlock())
+                return DeclSyntax(replaced)
+            }
+
+            // Subscripts (replace accessor block with empty block syntactically)
+            override func visit(_ node: SubscriptDeclSyntax) -> DeclSyntax {
+                if let accessor = node.accessorBlock {
+                    let isPublic = node.modifiers.containsPublicOrOpen
+                    if shouldKeepBody(isPublic: isPublic) { return DeclSyntax(node) }
+                    // Replace with empty accessor block { }
+                    let empty = AccessorBlockSyntax(accessors: .accessors(AccessorListSyntax([])))
+                    let replaced = node.with(\.accessorBlock, empty)
+                    return DeclSyntax(replaced)
                 }
-                return .skipChildren
+                return DeclSyntax(node)
             }
         }
 
         let tree = Parser.parse(source: text)
-        let planner = Planner(policy: policy)
-        planner.walk(tree)
-
-        guard !planner.replaces.isEmpty else {
-            return lightlyCondenseWhitespace(text)
-        }
-
-        // Replace from the end to keep offsets stable; map utf8 offsets via the utf8 view.
-        var result = text
-        let sorted = planner.replaces.sorted { $0.startUTF8 > $1.startUTF8 }
-
-        for r in sorted {
-            let u8 = result.utf8
-            guard
-                let startU8 = u8.index(u8.startIndex, offsetBy: r.startUTF8, limitedBy: u8.endIndex),
-                let endU8   = u8.index(u8.startIndex, offsetBy: r.endUTF8,   limitedBy: u8.endIndex),
-                let startIdx = String.Index(startU8, within: result),
-                let endIdx   = String.Index(endU8,   within: result)
-            else { continue }
-            result.replaceSubrange(startIdx..<endIdx, with: " {...}")
-        }
-
-        return lightlyCondenseWhitespace(result)
+        let rewriter = Elider(policy: policy)
+        let out = rewriter.visit(tree)
+        // Conservative whitespace pass for stability
+        return lightlyCondenseWhitespace(out.description)
     }
 }
 

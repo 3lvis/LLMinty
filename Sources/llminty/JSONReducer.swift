@@ -8,80 +8,92 @@ enum JSONReducer {
     private static let dictKeep = 6
 
     static func reduceJSONPreservingStructure(text: String) -> String  {
-        guard let data = text.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data, options: []) else {
-            // Pass-through if not valid JSON
+        // Parse JSON; if it fails, pass through unchanged.
+        guard let data = text.data(using: .utf8) else { return text }
+        let obj: Any
+        do {
+            obj = try JSONSerialization.jsonObject(with: data, options: [])
+        } catch {
             return text
         }
-        let reduced = reduce(json, seen: [])
+        let reduced = reduce(obj, seen: [])
         return stringify(reduced)
     }
 
     private static func reduce(_ v: Any, seen: Set<ObjectIdentifier>) -> Any  {
-        if let a = v as? [Any] {
-            return reduceArray(a, seen: seen)
-        } else if let d = v as? [String: Any] {
-            return reduceDict(d, seen: seen)
-        } else {
-            return v
-        }
+        if let a = v as? [Any] { return reduceArray(a, seen: seen) }
+        if let d = v as? [String: Any] { return reduceDict(d, seen: seen) }
+        return v
     }
 
     private static func reduceArray(_ a: [Any], seen: Set<ObjectIdentifier>) -> Any  {
-        if a.count <= head + tail {
-            return a.map { reduce($0, seen: seen) }
-        }
+        if a.count <= head + tail { return a.map { reduce($0, seen: seen) } }
         var out: [Any] = []
-        for i in 0..<head {
-            out.append(reduce(a[i], seen: seen))
-        }
-        let omitted = a.count - head - tail
-        out.append("… \(omitted) items trimmed …")
-        for i in (a.count - tail)..<a.count {
-            out.append(reduce(a[i], seen: seen))
-        }
+        let headSlice = a.prefix(head)
+        let tailSlice = a.suffix(tail)
+        out.append(contentsOf: headSlice.map { reduce($0, seen: seen) })
+        out.append("// trimmed \(a.count - head - tail) items")
+        out.append(contentsOf: tailSlice.map { reduce($0, seen: seen) })
         return out
     }
 
     private static func reduceDict(_ d: [String: Any], seen: Set<ObjectIdentifier>) -> Any  {
-        // Keep up to dictKeep keys (sorted for determinism)
-        var out: [String: Any] = [:]
-        let keys = d.keys.sorted()
-        if keys.count <= dictKeep {
-            for k in keys { out[k] = reduce(d[k]!, seen: seen) }
+        if d.count <= dictKeep {
+            // keep all, but reduce nested
+            var out: [String: Any] = [:]
+            for k in d.keys.sorted() {
+                out[k] = reduce(d[k]!, seen: seen)
+            }
             return out
         }
-        for k in keys.prefix(dictKeep) {
-            out[k] = reduce(d[k]!, seen: seen)
-        }
-        out["…"] = "… \(keys.count - dictKeep) keys trimmed …"
+        // Keep first dictKeep keys in sorted order for determinism
+        let keys = d.keys.sorted()
+        let kept = keys.prefix(dictKeep)
+        var out: [String: Any] = [:]
+        for k in kept { out[k] = reduce(d[k]!, seen: seen) }
+        out["//"] = "trimmed \(d.count - dictKeep) keys"
         return out
     }
 
     private static func stringify(_ v: Any) -> String  {
-        // Use JSONSerialization for valid JSON when possible; strings like the "… trimmed …" marker are fine.
-        if JSONSerialization.isValidJSONObject(v) {
-            if let data = try? JSONSerialization.data(withJSONObject: v, options: [.sortedKeys]),
-               let s = String(data: data, encoding: .utf8) {
-                return s
+        // Pretty-print-ish but compact; allow line comments we introduced.
+        func encode(_ x: Any, _ indent: String) -> String {
+            switch x {
+            case let s as String:
+                if s.hasPrefix("// ") || s == "//" || s.hasPrefix("// trimmed") {
+                    return s // synthetic comment
+                }
+                return "\"\(escape(s))\""
+            case let n as NSNumber:
+                if CFGetTypeID(n) == CFBooleanGetTypeID() {
+                    return n.boolValue ? "true" : "false"
+                }
+                return n.description
+            case let a as [Any]:
+                if a.isEmpty { return "[]" }
+                var parts: [String] = []
+                for el in a {
+                    parts.append(encode(el, indent + "  "))
+                }
+                return "[\n\(indent)  " + parts.joined(separator: ",\n\(indent)  ") + "\n\(indent)]"
+            case let d as [String: Any]:
+                if d.isEmpty { return "{}" }
+                // Keep insertion order of our constructed dict (sorted)
+                var parts: [String] = []
+                for k in d.keys.sorted() {
+                    let val = d[k]!
+                    if k == "//", let s = val as? String {
+                        parts.append("// \(s)")
+                    } else {
+                        parts.append("\"\(escape(k))\": \(encode(val, indent + "  "))")
+                    }
+                }
+                return "{\n\(indent)  " + parts.joined(separator: ",\n\(indent)  ") + "\n\(indent)}"
+            default:
+                return "\"\(escape(String(describing: x)))\""
             }
         }
-        // Fallback manual
-        switch v {
-        case let s as String:
-            return "\"\(escape(s))\""
-        case let n as NSNumber:
-            return n.stringValue
-        case let b as Bool:
-            return b ? "true" : "false"
-        case let arr as [Any]:
-            return "[" + arr.map { stringify($0) }.joined(separator: ",") + "]"
-        case let dict as [String: Any]:
-            let parts = dict.keys.sorted().map { "\"\(escape($0))\":" + stringify(dict[$0]!) }
-            return "{" + parts.joined(separator: ",") + "}"
-        default:
-            return "null"
-        }
+        return encode(v, "")
     }
 
     private static func escape(_ s: String) -> String  {
@@ -89,11 +101,11 @@ enum JSONReducer {
         out.reserveCapacity(s.count + 8)
         for ch in s {
             switch ch {
-            case "\\": out.append("\\\\")
-            case "\"": out.append("\\\"")
-            case "\n": out.append("\\n")
-            case "\r": out.append("\\r")
-            case "\t": out.append("\\t")
+            case "\\": out += "\\\\"
+            case "\"": out += "\\\""
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
             default: out.append(ch)
             }
         }

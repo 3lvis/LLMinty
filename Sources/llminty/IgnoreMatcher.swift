@@ -25,18 +25,16 @@ struct IgnoreMatcher {
     }
 
     // MARK: - Parser
-
     private static func parse(line: String) -> Pattern? {
         var s = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !s.isEmpty else { return nil }
-        if s.hasPrefix("#") { return nil }
+        guard !s.isEmpty, !s.hasPrefix("#") else { return nil }
 
-        var neg = false
+        var negated = false
         if s.first == "!" {
-            neg = true
+            negated = true
             s.removeFirst()
-            s = s.trimmingCharacters(in: .whitespaces)
         }
+        s = s.trimmingCharacters(in: .whitespaces)
 
         var dirOnly = false
         if s.hasSuffix("/") {
@@ -50,111 +48,110 @@ struct IgnoreMatcher {
             s.removeFirst()
         }
 
-        s = s.trimmingCharacters(in: .whitespaces)
-        guard !s.isEmpty else { return nil }
+        // collapse duplicate slashes for stability
+        while s.contains("//") { s = s.replacingOccurrences(of: "//", with: "/") }
+        if s.isEmpty { return nil }
 
-        // Normalize duplicate slashes
-        let segs = s.split(separator: "/").map { String($0) }
-        return Pattern(negated: neg, dirOnly: dirOnly, anchorRoot: anchorRoot, raw: line, segments: segs)
+        let segs = s.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        return Pattern(negated: negated, dirOnly: dirOnly, anchorRoot: anchorRoot, raw: line, segments: segs)
     }
 
     // MARK: - Eval
-
     func isIgnored(_ relativePath: String, isDirectory: Bool) -> Bool {
-        // Normalize path segments (no leading './')
-        let norm = relativePath.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: #"^\.\/"#, with: "", options: .regularExpression)
-        let pathSegs = norm.split(separator: "/").map { String($0) }
+        // Normalize relative path to slash-separated segments without leading "./"
+        let rel = relativePath.hasPrefix("./") ? String(relativePath.dropFirst(2)) : relativePath
+        let parts = rel.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
 
         var ignored = false
         for p in ordered {
             if p.dirOnly && !isDirectory { continue }
-            let matched = match(pattern: p, pathSegments: pathSegs)
+            let matched: Bool
+            if p.anchorRoot {
+                matched = Self.match(pattern: p, pathSegments: parts, startAt: 0)
+            } else {
+                // Try matching at any starting segment boundary
+                var found = false
+                if parts.isEmpty {
+                    found = Self.match(pattern: p, pathSegments: parts, startAt: 0)
+                } else {
+                    for i in 0...max(0, parts.count - 1) {
+                        if Self.match(pattern: p, pathSegments: parts, startAt: i) { found = true; break }
+                    }
+                }
+                matched = found
+            }
+
             if matched {
+                // last match wins
                 ignored = !p.negated
             }
         }
         return ignored
     }
 
+    private static func match(pattern p: Pattern, pathSegments: [String]) -> Bool {
+        matchFrom(patternSegs: p.segments, pathSegs: pathSegments, startAt: 0)
+    }
+
+    // Segment matcher for '*' and '?'
     private static func matchSegment(_ pat: String, _ txt: String) -> Bool {
-        // '*' matches any (including empty), '?' matches one (no '/': segments already split)
+        // simple glob within segment
         var pi = pat.startIndex
         var ti = txt.startIndex
 
         func recurse(_ nextPi: String.Index, _ tFrom: String.Index) -> Bool {
-            var t = tFrom
-            while true {
-                if matchCore(nextPi, t) { return true }
-                if t == txt.endIndex { break }
-                t = txt.index(after: t)
-            }
-            return false
-        }
-
-        func matchCore(_ pFrom: String.Index, _ tFrom: String.Index) -> Bool {
-            var p = pFrom
-            var t = tFrom
-            while p < pat.endIndex {
-                let ch = pat[p]
-                if ch == "*" {
-                    let afterStar = pat.index(after: p)
-                    if afterStar == pat.endIndex { return true } // trailing *
-                    return recurse(afterStar, t)
-                } else if ch == "?" {
-                    if t == txt.endIndex { return false }
-                    t = txt.index(after: t)
-                    p = pat.index(after: p)
+            var i = nextPi
+            var j = tFrom
+            while i < pat.endIndex {
+                let pc = pat[i]
+                if pc == "*" {
+                    // try all suffixes (including empty)
+                    let afterStar = pat.index(after: i)
+                    if afterStar == pat.endIndex { return true }
+                    var k = j
+                    while true {
+                        if recurse(afterStar, k) { return true }
+                        if k == txt.endIndex { break }
+                        k = txt.index(after: k)
+                    }
+                    return false
+                } else if pc == "?" {
+                    if j == txt.endIndex { return false }
+                    i = pat.index(after: i)
+                    j = txt.index(after: j)
                 } else {
-                    if t == txt.endIndex || txt[t] != ch { return false }
-                    t = txt.index(after: t)
-                    p = pat.index(after: p)
+                    if j == txt.endIndex || txt[j] != pc { return false }
+                    i = pat.index(after: i)
+                    j = txt.index(after: j)
                 }
             }
-            return t == txt.endIndex
+            return j == txt.endIndex
         }
-
-        return matchCore(pi, ti)
-    }
-
-    private func match(pattern p: Pattern, pathSegments: [String]) -> Bool {
-        if p.anchorRoot {
-            return Self.matchFrom(patternSegs: p.segments, pathSegs: pathSegments, startAt: 0)
-        } else {
-            if p.segments.first == "**" {
-                // '**' at start can match from 0
-                if Self.matchFrom(patternSegs: p.segments, pathSegs: pathSegments, startAt: 0) { return true }
-            }
-            // Try each possible start offset
-            for i in 0...(pathSegments.count) {
-                if Self.matchFrom(patternSegs: p.segments, pathSegs: pathSegments, startAt: i) { return true }
-            }
-            return false
-        }
+        return recurse(pi, ti)
     }
 
     // '**' matches zero or more segments. '*' matches within a segment (no '/').
     private static func matchFrom(patternSegs: [String], pathSegs: [String], startAt: Int) -> Bool {
-        func helper(_ pi: Int, _ si: Int) -> Bool {
-            if pi == patternSegs.count { return si == pathSegs.count }
-            let p = patternSegs[pi]
-
-            if p == "**" {
-                // '**' eats zero..n segments
-                if pi + 1 == patternSegs.count { return true } // trailing '**' matches rest
-                var k = si
+        // Backtracking over segments
+        func dfs(_ pi: Int, _ ti: Int) -> Bool {
+            if pi == patternSegs.count { return ti == pathSegs.count }
+            let seg = patternSegs[pi]
+            if seg == "**" {
+                // match zero or more segments
+                if pi == patternSegs.count - 1 { return true } // trailing '**' consumes rest
+                var k = ti
                 while k <= pathSegs.count {
-                    if helper(pi + 1, k) { return true }
+                    if dfs(pi + 1, k) { return true }
+                    if k == pathSegs.count { break }
                     k += 1
                 }
                 return false
             } else {
-                if si >= pathSegs.count { return false }
-                if matchSegment(p, pathSegs[si]) {
-                    return helper(pi + 1, si + 1)
-                }
-                return false
+                if ti >= pathSegs.count { return false }
+                if !matchSegment(seg, pathSegs[ti]) { return false }
+                return dfs(pi + 1, ti + 1)
             }
         }
-        return helper(0, startAt)
+        return dfs(0, startAt)
     }
 }
