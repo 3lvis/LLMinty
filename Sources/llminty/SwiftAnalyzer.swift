@@ -28,10 +28,8 @@ struct AnalyzedFile {
 final class SwiftAnalyzer {
 
     func analyze(files: [RepoFile]) throws -> [AnalyzedFile] {
-        // Only consider Swift files for AST-based analysis
         let swiftFiles = files.filter { $0.kind == .swift }
 
-        // Pass 1: parse and collect per-file signals
         var analyzed: [AnalyzedFile] = []
         analyzed.reserveCapacity(swiftFiles.count)
 
@@ -41,7 +39,6 @@ final class SwiftAnalyzer {
             analyzed.append(a)
         }
 
-        // Build type -> filePath index (deterministic: smallest path wins on ties)
         var typeToFile: [String: String] = [:]
         for a in analyzed {
             for t in a.declaredTypes {
@@ -53,7 +50,6 @@ final class SwiftAnalyzer {
             }
         }
 
-        // Pass 2: infer outgoing file deps from referenced types
         for i in 0..<analyzed.count {
             var deps: Set<String> = []
             for (name, _) in analyzed[i].referencedTypes {
@@ -64,7 +60,6 @@ final class SwiftAnalyzer {
             analyzed[i].outgoingFileDeps = Array(deps).sorted()
         }
 
-        // Pass 3: inbound ref counts
         var inbound: [String: Int] = [:]
         for a in analyzed {
             for dep in a.outgoingFileDeps {
@@ -84,7 +79,6 @@ final class SwiftAnalyzer {
         let collector = SwiftCollector(context: &ctx)
         collector.walk(tree)
 
-        // Entrypoint already computed in collector
         return AnalyzedFile(
             file: file,
             text: text,
@@ -162,7 +156,7 @@ private final class SwiftCollector: SyntaxVisitor {
     override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind {
         let name = node.name.text
         ctx.pointee.declaredTypes.insert(name)
-        if node.modifiers.containsPublicOrOpen { ctx.pointee.publicAPIScoreRaw += 2 } // protocols weighted ×2
+        if node.modifiers.containsPublicOrOpen { ctx.pointee.publicAPIScoreRaw += 2 } // protocols ×2
         typeStack.append(name)
         return .visitChildren
     }
@@ -177,10 +171,8 @@ private final class SwiftCollector: SyntaxVisitor {
 
     override func visit(_ node: SourceFileSyntax) -> SyntaxVisitorContinueKind {
         // Top-level code heuristic: any non-declaration item at file scope.
-        // CodeBlockItemSyntax.item is `Syntax`. If it's not a DeclSyntax, treat as top-level code.
         for item in node.statements {
             if item.item.as(DeclSyntax.self) == nil {
-                // Could be StmtSyntax or ExprSyntax -> treat as top-level code
                 ctx.pointee.hasTopLevelCode = true
                 break
             }
@@ -201,7 +193,6 @@ private final class SwiftCollector: SyntaxVisitor {
     }
 
     override func visit(_ node: MemberTypeSyntax) -> SyntaxVisitorContinueKind {
-        // Count the base name only (Foo.Bar -> Foo)
         let n = node.baseType.trimmedDescription
         if !n.isEmpty {
             ctx.pointee.referencedTypes[n, default: 0] += 1
@@ -215,7 +206,6 @@ private final class SwiftCollector: SyntaxVisitor {
         case .binaryOperator(let op):
             if op == "&&" || op == "||" { ctx.pointee.complexity += 1 }
         default:
-            // Count keywords via token text (robust across SwiftSyntax versions)
             let t = String(token.text)
             switch t {
             case "if", "for", "while", "guard", "case", "repeat", "catch", "switch":

@@ -14,21 +14,20 @@ let segments: [String] // split on '/'
 private let ordered: [Pattern]
 init(builtInPatterns: [String], userFileText: String) throws {
 var list: [Pattern] = []
-for p in builtInPatterns {
-if let pat = Self.parse(line: p) { list.append(pat) }
-}
+for p in builtInPatterns { if let pat = Self.parse(line: p) { list.append(pat) } }
 for line in userFileText.components(separatedBy: .newlines) {
 if let pat = Self.parse(line: line) { list.append(pat) }
 }
 self.ordered = list
 }
-/// Parse a single ignore line into a compiled Pattern
-private static func parse(line: String) -> Pattern? { ... }
-/// Last-match-wins as in gitignore
-func isIgnored(_ relativePath: String, isDirectory: Bool) -> Bool { ... }
-private static func match(pattern p: Pattern, pathSegments: [String]) -> Bool { ... }
+// MARK: - Parse
+/// Parses a single .gitignore-like line into a Pattern. Returns nil for comments/blank lines.
+private static func parse(line: String) -> Pattern?   {...}
+// MARK: - Match
+func isIgnored(_ relativePath: String, isDirectory: Bool) -> Bool   {...}
+private static func match(pattern p: Pattern, pathSegments: [String]) -> Bool   {...}
 // '**' matches zero or more segments. '*' matches within a segment (no '/').
-private static func matchFrom(patternSegs: [String], pathSegs: [String], startAt: Int) -> Bool { ... }
+private static func matchFrom(patternSegs: [String], pathSegs: [String], startAt: Int) -> Bool   {...}
 }
 FILE: Sources/llminty/FileScanner.swift
 
@@ -49,36 +48,54 @@ static let maxFileBytes: UInt64 = 2 * 1024 * 1024 // 2 MB per file cap
 struct FileScanner {
 let root: URL
 let matcher: IgnoreMatcher
-func scan() throws -> [RepoFile] { ... }
-static func seemsBinary(url: URL) -> Bool {
-guard let fh = try? FileHandle(forReadingFrom: url) else { return false }
-defer { try? fh.close() }
-let sampleSize = 2048
-let data = try? fh.read(upToCount: sampleSize)
-guard let d = data, !d.isEmpty else { return false }
-// Heuristics:
-// 1) any NUL byte -> binary
-if d.contains(0) { return true }
-// 2) ratio of non-printable (excluding \t\r\n) too high -> binary
-var nonPrintable = 0
-for b in d {
-if b == 9 || b == 10 || b == 13 { continue } // \t \n \r
-if b < 32 || b == 127 { nonPrintable += 1 }
+func scan() throws -> [RepoFile] {
+var results: [RepoFile] = []
+let fm = FileManager.default
+guard let enumerator = fm.enumerator(
+at: root,
+includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
+options: [.skipsHiddenFiles],
+errorHandler: { (_, _) -> Bool in true }
+) else {
+throw NSError(domain: "llminty", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to enumerate directory"])
 }
-let ratio = Double(nonPrintable) / Double(d.count)
-return ratio > 0.30
+for case let url as URL in enumerator {
+let rel = (url.path).path(replacingBase: root.path)
+let rIsDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+if matcher.isIgnored(rel, isDirectory: rIsDir) {
+if rIsDir { enumerator.skipDescendants() }
+continue
 }
+if rIsDir { continue }
+let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { UInt64($0) } ?? 0
+let ext = url.pathExtension.lowercased()
+let kind: FileKind
+switch ext {
+case "swift": kind = .swift
+case "json":  kind = .json
+case "md", "yml", "yaml", "xml", "plist", "txt", "sh", "toml": kind = .text
+default:
+if size > ScanLimits.maxFileBytes { kind = .binary }
+else if Self.seemsBinary(url: url) { kind = .binary }
+else { kind = .unknown }
+}
+results.append(RepoFile(relativePath: rel, absoluteURL: url, isDirectory: false, kind: kind, size: size))
+}
+// Deterministic stable path sort
+results.sort { $0.relativePath < $1.relativePath }
+return results
+}
+static func seemsBinary(url: URL) -> Bool   {...}
 }
 private extension String {
-func removingPrefix(_ p: String) -> String { ... }
-/// Return a relative path string from the absolute root. Normalizes separators and removes leading slash.
-func relativePath(from root: String) -> String { ... }
+func removingPrefix(_ p: String) -> String {
+guard hasPrefix(p) else { return self }
+return String(dropFirst(p.count))
+}
+func relativePath(from root: String) -> String   {...}
 }
 extension String {
-/// Replace a base prefix with "", returning a normalized relative path (no leading slash).
-func path(replacingBase base: String) -> String {
-return self.relativePath(from: base)
-}
+func path(replacingBase base: String) -> String   {...}
 }
 FILE: Sources/llminty/SwiftAnalyzer.swift
 
@@ -106,8 +123,8 @@ var inboundRefCount: Int
 }
 // MARK: - Analyzer
 final class SwiftAnalyzer {
-func analyze(files: [RepoFile]) throws -> [AnalyzedFile] { ... }
-private func analyzeSwift(file: RepoFile, text: String) -> AnalyzedFile { ... }
+func analyze(files: [RepoFile]) throws -> [AnalyzedFile]  {...}
+private func analyzeSwift(file: RepoFile, text: String) -> AnalyzedFile  {...}
 }
 // MARK: - Collector with SwiftSyntax
 private struct CollectorContext {
@@ -122,79 +139,24 @@ var hasTopLevelCode: Bool = false
 private final class SwiftCollector: SyntaxVisitor {
 private var ctx: UnsafeMutablePointer<CollectorContext>
 private var typeStack: [String] = []
-init(context: inout CollectorContext) {
-self.ctx = withUnsafeMutablePointer(to: &context) { $0 }
-super.init(viewMode: .sourceAccurate)
-}
-override func visit(_ node: ImportDeclSyntax) -> SyntaxVisitorContinueKind {
-ctx.pointee.importedModules.insert(node.path.trimmedDescription)
-return .visitChildren
-}
-override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind { ... }
-override func visitPost(_ node: StructDeclSyntax)  { _ = typeStack.popLast() }
-override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
-let name = node.name.text
-ctx.pointee.declaredTypes.insert(name)
-if node.modifiers.containsPublicOrOpen { ctx.pointee.publicAPIScoreRaw += 1 }
-typeStack.append(name)
-return .visitChildren
-}
-override func visitPost(_ node: ClassDeclSyntax)  { _ = typeStack.popLast() }
-override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind {
-let name = node.name.text
-ctx.pointee.declaredTypes.insert(name)
-if node.modifiers.containsPublicOrOpen { ctx.pointee.publicAPIScoreRaw += 1 }
-typeStack.append(name)
-return .visitChildren
-}
-override func visitPost(_ node: EnumDeclSyntax)  { _ = typeStack.popLast() }
-override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind {
-let name = node.name.text
-ctx.pointee.declaredTypes.insert(name)
-if node.modifiers.containsPublicOrOpen { ctx.pointee.publicAPIScoreRaw += 2 } // protocols weighted ×2
-typeStack.append(name)
-return .visitChildren
-}
-override func visitPost(_ node: ProtocolDeclSyntax)  { _ = typeStack.popLast() }
-override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind {
-if node.attributeName.trimmedDescription == "main" {
-ctx.pointee.isEntrypoint = true
-}
-return .visitChildren
-}
-override func visit(_ node: SourceFileSyntax) -> SyntaxVisitorContinueKind {
-// Top-level code heuristic: any non-declaration item at file scope.
-// CodeBlockItemSyntax.item is `Syntax`. If it's not a DeclSyntax, treat as top-level code.
-for item in node.statements {
-if item.item.as(DeclSyntax.self) == nil {
-// Could be StmtSyntax or ExprSyntax -> treat as top-level code
-ctx.pointee.hasTopLevelCode = true
-break
-}
-}
-return .visitChildren
-}
-override func visitPost(_ node: SourceFileSyntax)  {
-if ctx.pointee.hasTopLevelCode { ctx.pointee.isEntrypoint = true }
-}
+init(context: inout CollectorContext)  {...}
+override func visit(_ node: ImportDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visitPost(_ node: StructDeclSyntax)   {...}
+override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visitPost(_ node: ClassDeclSyntax)   {...}
+override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visitPost(_ node: EnumDeclSyntax)   {...}
+override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visitPost(_ node: ProtocolDeclSyntax)   {...}
+override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visit(_ node: SourceFileSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visitPost(_ node: SourceFileSyntax)   {...}
 // Types referenced (IdentifierTypeSyntax and MemberTypeSyntax roots)
-override func visit(_ node: IdentifierTypeSyntax) -> SyntaxVisitorContinueKind {
-let n = node.name.text
-if !n.isEmpty {
-ctx.pointee.referencedTypes[n, default: 0] += 1
-}
-return .visitChildren
-}
-override func visit(_ node: MemberTypeSyntax) -> SyntaxVisitorContinueKind {
-// Count the base name only (Foo.Bar -> Foo)
-let n = node.baseType.trimmedDescription
-if !n.isEmpty {
-ctx.pointee.referencedTypes[n, default: 0] += 1
-}
-return .visitChildren
-}
+override func visit(_ node: IdentifierTypeSyntax) -> SyntaxVisitorContinueKind  {...}
+override func visit(_ node: MemberTypeSyntax) -> SyntaxVisitorContinueKind  {...}
 // Complexity: count control-flow tokens and boolean ops
-override func visit(_ token: TokenSyntax) -> SyntaxVisitorContinueKind { ... }
+override func visit(_ token: TokenSyntax) -> SyntaxVisitorContinueKind  {...}
 }
 // MARK: - Small helpers
 private extension DeclModifierListSyntax {
@@ -210,14 +172,76 @@ private extension Optional where Wrapped == DeclModifierListSyntax {
 var containsPublicOrOpen: Bool { self?.containsPublicOrOpen ?? false }
 }
 private extension StructDeclSyntax {
-func inheritanceClauseContains(type: String) -> Bool {
-if let clause = self.inheritanceClause {
-for inhe in clause.inheritedTypes {
-if inhe.type.trimmedDescription == type { return true }
+func inheritanceClauseContains(type: String) -> Bool  {...}
+}
+FILE: Sources/llminty/App.swift
+
+import Foundation
+enum BuiltInExcludes {
+static func defaultPatterns(outputFileName: String) -> [String] {
+// Users can re-include via .mintyignore negation (!)
+return [
+// VCS / editor
+".git/", ".gitignore", ".gitattributes", ".DS_Store", ".idea/", ".vscode/", ".svn/", ".hg/",
+// SwiftPM
+".build/", ".swiftpm/",
+// Xcode
+"DerivedData/", "*.xcodeproj/", "*.xcworkspace/", "xcuserdata/",
+// Apple bundles/outputs
+"*.app/", "*.appex/", "*.framework/", "*.dSYM/", "*.xcarchive/",
+// Dependency managers
+"Pods/", "Carthage/",
+// Assets / binary noise (wide net by default)
+"*.xcassets/", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.heic", "*.pdf",
+"*.svg", "*.webp", "*.ttf", "*.otf", "*.woff", "*.woff2",
+"*.zip", "*.tar", "*.tar.gz", "*.rar", "*.7z",
+"*.mp3", "*.wav", "*.aiff", "*.m4a", "*.mp4", "*.mov",
+"*.bin", "*.dat",
+// Self-exclude
+outputFileName
+]
 }
 }
-return false
+/// Aggressively trims blank lines for final output while keeping exactly one
+/// blank line after each "FILE: " header. Also:
+/// - trims trailing spaces,
+/// - collapses 3+ newlines to 2 during pre-pass,
+/// - removes all other blank-only lines.
+/// Returns a string that always ends with a single trailing newline.
+func postProcessMinty(_ s: String) -> String {
+// 1) Trim trailing spaces and collapse extreme newline runs
+let pre = s
+.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression)
+.replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
+// 2) Keep exactly one blank after each header; drop other blank-only lines
+let lines = pre.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
+var result: [String] = []
+result.reserveCapacity(lines.count)
+var justSawHeader = false
+for line in lines {
+let trimmed = line.trimmingCharacters(in: .whitespaces)
+if line.hasPrefix("FILE: ") {
+result.append(trimmed)       // store header without trailing spaces
+justSawHeader = true
+continue
 }
+if trimmed.isEmpty {
+if justSawHeader {
+result.append("")        // keep one blank after the header
+}
+// else: drop blank line
+} else {
+result.append(trimmed)       // keep non-blank (trimmed right/left)
+justSawHeader = false
+}
+}
+// 3) Single trailing newline
+let joined = result.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+return joined + "\n"
+}
+public struct LLMintyApp {
+public init() {}
+public func run() throws   {...}
 }
 FILE: Sources/llminty/Scoring.swift
 
@@ -287,166 +311,6 @@ pageRank: pr[a.file.relativePath] ?? 0.0
 return out
 }
 }
-FILE: Sources/llminty/Rendering.swift
-
-import Foundation
-import SwiftParser
-import SwiftSyntax
-struct RenderedFile {
-let relativePath: String
-let content: String
-}
-final class Renderer {
-func render(file: ScoredFile, score: Double) throws -> RenderedFile { ... }
-// MARK: - Text compaction
-/// For .text / .unknown: trim trailing spaces per line, collapse runs of blank lines to a single blank.
-private func compactText(_ s: String) -> String { ... }
-/// For Swift bodies we sometimes want a gentler pass.
-private func lightlyCondenseWhitespace(_ s: String) -> String { ... }
-// MARK: - Swift policies
-enum SwiftPolicy {
-case keepAllBodiesLightlyCondensed            // s ≥ 0.75
-case keepPublicBodiesElideOthers              // 0.50 ≤ s < 0.75
-case keepOneBodyPerTypeElideRest              // 0.25 ≤ s < 0.50
-case signaturesOnly                           // s < 0.25
-}
-func policyFor(score: Double) -> SwiftPolicy { ... }
-// MARK: - Swift rendering (mechanical elision)
-/// Mechanically elide Swift bodies according to the policy (generic & deterministic).
-/// - Keeps short bodies everywhere (thresholds below), and keeps the shortest body per type in the 0.25–0.50 bin.
-func renderSwift(text: String, policy: SwiftPolicy) throws -> String {
-struct Fn {
-let range: Range<String.Index>      // full { ... } including braces
-let bodyRange: Range<String.Index>  // interior text between braces
-let isPublic: Bool
-let typePath: [String]              // nesting types
-let lines: Int
-}
-let src = text
-// Total lines (for small-file exemption)
-let totalLines: Int = {
-var n = 1
-for ch in src where ch == "\n" { n += 1 }
-return n
-}()
-// --- thresholds (mechanical) ---
-var shortKeepAllPolicies = 12
-var shortKeepInSignOnly  = 5
-if totalLines <= 120 {
-// small-file exemption: be a bit more lenient
-shortKeepAllPolicies = max(shortKeepAllPolicies, 16)
-shortKeepInSignOnly  = max(shortKeepInSignOnly, 8)
-}
-// Scan once; maintain a type context stack using matched braces.
-var fns: [Fn] = []
-fns.reserveCapacity(64)
-struct TypeCtx { let name: String; let end: String.Index }
-var typeCtx: [TypeCtx] = []
-@inline(__always)
-func isIdent(_ c: Character) -> Bool { c.isLetter || c.isNumber || c == "_" }
-func skipSpaces(_ i: String.Index) -> String.Index { ... }
-func readWord(_ i: String.Index) -> (String, String.Index) { ... }
-func matchBraces(from start: String.Index) -> String.Index? { ... }
-func lineCount(in r: Range<String.Index>) -> Int { ... }
-var i = src.startIndex
-while i < src.endIndex {
-// pop expired type contexts
-while let last = typeCtx.last, i >= last.end { _ = typeCtx.popLast() }
-if src[i].isWhitespace {
-i = src.index(after: i); continue
-}
-// gather modifiers
-var j = i
-var modifiers: [String] = []
-let knownMods: Set<String> = ["public","open","internal","private","fileprivate","static","class","final","mutating","nonmutating","override"]
-while j < src.endIndex {
-j = skipSpaces(j)
-let (w, afterW) = readWord(j)
-if w.isEmpty || !knownMods.contains(w) { break }
-modifiers.append(w)
-j = afterW
-}
-// keyword after modifiers
-let (kw, afterKW) = readWord(j)
-if kw == "struct" || kw == "class" || kw == "enum" || kw == "protocol" {
-var nameStart = afterKW
-nameStart = skipSpaces(nameStart)
-let (name, afterName) = readWord(nameStart)
-var k = afterName
-while k < src.endIndex, src[k] != "{" { k = src.index(after: k) }
-if k < src.endIndex, src[k] == "{", let end = matchBraces(from: k) {
-let endPlusOne = src.index(after: end)
-typeCtx.append(.init(name: name.isEmpty ? "<anon>" : name, end: endPlusOne))
-i = src.index(after: k)
-continue
-}
-i = afterName
-continue
-}
-if kw == "func" || kw == "init" || kw == "subscript" { ... }
-}
-// MARK: - Small helpers (parity with existing structure)
-private extension String {
-func trimRightSpaces() -> String { ... }
-}
-private extension DeclModifierListSyntax {
-var containsPublicOrOpen: Bool {
-for m in self {
-let k = m.name.text
-if k == "public" || k == "open" { return true }
-}
-return false
-}
-}
-private extension Optional where Wrapped == DeclModifierListSyntax {
-var containsPublicOrOpen: Bool { self?.containsPublicOrOpen ?? false }
-}
-FILE: Sources/llminty/App.swift
-
-import Foundation
-enum BuiltInExcludes {
-static func defaultPatterns(outputFileName: String) -> [String] {
-// Users can re-include via .mintyignore negation (!)
-return [
-// VCS / editor
-".git/", ".gitignore", ".gitattributes", ".DS_Store", ".idea/", ".vscode/", ".svn/", ".hg/",
-// SwiftPM
-".build/", ".swiftpm/",
-// Xcode
-"DerivedData/", "*.xcodeproj/", "*.xcworkspace/", "xcuserdata/",
-// Apple bundles/outputs
-"*.app/", "*.appex/", "*.framework/", "*.dSYM/", "*.xcarchive/",
-// Dependency managers
-"Pods/", "Carthage/",
-// Assets / binary noise (wide net by default)
-"*.xcassets/", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.heic", "*.pdf",
-"*.svg", "*.webp", "*.ttf", "*.otf", "*.woff", "*.woff2",
-"*.zip", "*.tar", "*.tar.gz", "*.rar", "*.7z",
-"*.mp3", "*.wav", "*.aiff", "*.m4a", "*.mp4", "*.mov",
-"*.bin", "*.dat",
-// Self-exclude
-outputFileName
-]
-}
-}
-/// Aggressively trims blank lines for final output while keeping exactly one
-/// blank line after each "FILE: " header. Also:
-/// - trims trailing spaces,
-/// - collapses 3+ newlines to 2 during pre-pass,
-/// - removes all other blank-only lines.
-/// Returns a string that always ends with a single trailing newline.
-func postProcessMinty(_ s: String) -> String { ... }
-public struct LLMintyApp {
-public init() {}
-public func run() throws { ... }
-}
-private extension String {
-func trimRightSpaces() -> String {
-var s = self
-while s.last == " " { _ = s.removeLast() }
-return s
-}
-}
 FILE: Sources/llminty/GraphCentrality.swift
 
 import Foundation
@@ -495,69 +359,80 @@ return out
 /// Dependency-aware emission order:
 /// If A depends on B, emit B before A. When multiple nodes are available,
 /// prefer higher score, then lexicographic path.
-static func orderDependencyAware(_ scored: [ScoredFile]) -> [ScoredFile] {
-let nodes: [String] = scored.map { $0.analyzed.file.relativePath }
-let idx: [String: Int] = Dictionary(uniqueKeysWithValues: nodes.enumerated().map { ($1, $0) })
-// Build graph with edges B -> A if A depends on B
-var inDegree = Array(repeating: 0, count: nodes.count)
-var adj: [Set<Int>] = Array(repeating: [], count: nodes.count)
-for (aIndex, s) in scored.enumerated() {
-for depPath in s.analyzed.outgoingFileDeps {
-if let bIndex = idx[depPath] {
-// Edge: dep (B) -> this (A)
-if !adj[bIndex].contains(aIndex) {
-adj[bIndex].insert(aIndex)
-inDegree[aIndex] += 1
+static func orderDependencyAware(_ scored: [ScoredFile]) -> [ScoredFile]  {...}
+}
+FILE: Sources/llminty/Rendering.swift
+
+import Foundation
+import SwiftParser
+import SwiftSyntax
+struct RenderedFile {
+let relativePath: String
+let content: String
+}
+final class Renderer {
+func render(file: ScoredFile, score: Double) throws -> RenderedFile {
+switch file.analyzed.file.kind {
+case .swift:
+let policy = policyFor(score: score)
+let content = try renderSwift(text: file.analyzed.text, policy: policy)
+return RenderedFile(relativePath: file.analyzed.file.relativePath, content: content)
+case .json:
+let reduced = JSONReducer.reduceJSONPreservingStructure(text: file.analyzed.text)
+return RenderedFile(relativePath: file.analyzed.file.relativePath, content: reduced)
+case .text, .unknown:
+let compact = compactText(file.analyzed.text)
+return RenderedFile(relativePath: file.analyzed.file.relativePath, content: compact)
+case .binary:
+let size = file.analyzed.file.size
+let type = (file.analyzed.file.relativePath as NSString).pathExtension.lowercased()
+let placeholder = "/* binary \(type.isEmpty ? "file" : type) — \(size) bytes (omitted) */\n"
+return RenderedFile(relativePath: file.analyzed.file.relativePath, content: placeholder)
 }
 }
+// MARK: - Text compaction
+/// For .text / .unknown: trim trailing spaces per line, collapse runs of blank lines to a single blank.
+private func compactText(_ s: String) -> String  {...}
+/// For Swift bodies: a gentle pass that trims trailing spaces and collapses 3+ blank lines to 2.
+private func lightlyCondenseWhitespace(_ s: String) -> String  {...}
+// MARK: - Swift policies
+enum SwiftPolicy {
+case keepAllBodiesLightlyCondensed            // s ≥ 0.75
+case keepPublicBodiesElideOthers              // 0.50 ≤ s < 0.75
+case keepOneBodyPerTypeElideRest              // 0.25 ≤ s < 0.50
+case signaturesOnly                           // s < 0.25
 }
+func policyFor(score: Double) -> SwiftPolicy  {...}
+// MARK: - Swift rendering (mechanical, deterministic elision)
+/// Mechanically elide Swift function/initializer bodies according to policy.
+/// Uses SwiftSyntax positions to replace bodies in the original source, so signatures remain intact.
+func renderSwift(text: String, policy: SwiftPolicy) throws -> String  {...}
 }
-// Min-heap-ish queue by (-score, path) to prefer higher score first among zero in-degree
-func heapSort(_ arr: [Int]) -> [Int] {
-return arr.sorted { i, j in
-let si = scored[i], sj = scored[j]
-if si.score != sj.score { return si.score > sj.score }
-return si.analyzed.file.relativePath < sj.analyzed.file.relativePath
-}
-}
-var queue = heapSort((0..<nodes.count).filter { inDegree[$0] == 0 })
-var out: [ScoredFile] = []
-while !queue.isEmpty {
-let v = queue.removeFirst()
-out.append(scored[v])
-for u in adj[v] {
-inDegree[u] -= 1
-if inDegree[u] == 0 {
-// insert keeping queue sorted
-let pos = queue.firstIndex(where: { i in
-let si = scored[u], sj = scored[i]
-if si.score != sj.score { return si.score > sj.score }
-return si.analyzed.file.relativePath < sj.analyzed.file.relativePath
-}) ?? queue.endIndex
-queue.insert(u, at: pos)
-}
-}
-}
-// Cycles: append remaining deterministically by score then path
-if out.count < scored.count {
-let placed = Set(out.map { $0.analyzed.file.relativePath })
-let remaining = scored.filter { !placed.contains($0.analyzed.file.relativePath) }
-let sortedRem = remaining.sorted {
-if $0.score != $1.score { return $0.score > $1.score }
-return $0.analyzed.file.relativePath < $1.analyzed.file.relativePath
-}
-out.append(contentsOf: sortedRem)
-}
-return out
-}
+extension StringProtocol {
+var isNewline: Bool { return self == "\n" || self == "\r\n" }
 }
 FILE: Tests/LLMintyTests/GraphCentralityTests.swift
 
 import XCTest
 @testable import llminty
 final class GraphCentralityTests: XCTestCase {
-private func analyzed(_ path: String, deps: [String]) -> AnalyzedFile { ... }
-func testDependencyAwareOrder() { ... }
+private func analyzed(_ path: String, deps: [String]) -> AnalyzedFile  {...}
+func testDependencyAwareOrder()  {...}
+}
+FILE: Sources/llminty/JSONReducer.swift
+
+import Foundation
+enum JSONReducer {
+// Head/Tail sample sizes
+private static let head = 3
+private static let tail = 2
+private static let dictKeep = 6
+static func reduceJSONPreservingStructure(text: String) -> String   {...}
+private static func reduce(_ v: Any, seen: Set<ObjectIdentifier>) -> Any   {...}
+private static func reduceArray(_ a: [Any], seen: Set<ObjectIdentifier>) -> Any   {...}
+private static func reduceDict(_ d: [String: Any], seen: Set<ObjectIdentifier>) -> Any   {...}
+private static func stringify(_ v: Any) -> String   {...}
+private static func escape(_ s: String) -> String   {...}
 }
 FILE: Sources/llminty/main.swift
 
@@ -575,32 +450,7 @@ FILE: Tests/LLMintyTests/SwiftAnalyzerTests.swift
 import XCTest
 @testable import llminty
 final class SwiftAnalyzerTests: XCTestCase {
-func testEntrypointPublicAPIAndRefs() throws { ... }
-}
-FILE: Sources/llminty/JSONReducer.swift
-
-import Foundation
-enum JSONReducer {
-// Head/Tail sample sizes
-private static let head = 3
-private static let tail = 2
-private static let dictKeep = 6
-static func reduceJSONPreservingStructure(text: String) -> String {
-guard let data = text.data(using: .utf8) else { return text }
-let obj = try? JSONSerialization.jsonObject(with: data, options: [])
-guard let json = obj else { return text } // pass-through on invalid JSON
-let reduced = reduce(json, seen: [])
-return stringify(reduced)
-}
-private static func reduce(_ v: Any, seen: Set<ObjectIdentifier>) -> Any {
-if let a = v as? [Any] { return reduceArray(a, seen: seen) }
-if let d = v as? [String: Any] { return reduceDict(d, seen: seen) }
-return v
-}
-private static func reduceArray(_ a: [Any], seen: Set<ObjectIdentifier>) -> Any { ... }
-private static func reduceDict(_ d: [String: Any], seen: Set<ObjectIdentifier>) -> Any { ... }
-private static func stringify(_ v: Any) -> String { ... }
-private static func escape(_ s: String) -> String { ... }
+func testEntrypointPublicAPIAndRefs() throws  {...}
 }
 FILE: Tests/LLMintyTests/LLMintyTests.swift
 
@@ -608,33 +458,43 @@ import XCTest
 @testable import llminty
 final class LLMintyTests: XCTestCase {
 // End-to-end: builds a mini project, runs the app, checks minty.txt framing and ignore behavior.
-func testEndToEndRunCreatesMintyFile() throws { ... }
+func testEndToEndRunCreatesMintyFile() throws  {...}
 // Compaction policy: keep exactly one blank line after each FILE header, drop others,
 // but allow a single terminal blank line (trailing newline in the file).
-func testKeepsOneBlankAfterHeadersAndDropsOthers() { ... }
+func testKeepsOneBlankAfterHeadersAndDropsOthers()  {...}
 }
 FILE: Tests/LLMintyTests/RenderingTests.swift
 
 import XCTest
 @testable import llminty
 final class RenderingTests: XCTestCase {
-func testPolicyForThresholds() {
-let r = Renderer()
-// Original bins
-XCTAssertEqual(r.policyFor(score: 0.80), .keepAllBodiesLightlyCondensed)
-XCTAssertEqual(r.policyFor(score: 0.60), .keepPublicBodiesElideOthers)
-XCTAssertEqual(r.policyFor(score: 0.30), .keepOneBodyPerTypeElideRest)
-XCTAssertEqual(r.policyFor(score: 0.10), .signaturesOnly)
-}
-func testRenderSwiftElidesNonPublicBodiesUnderPolicy() throws { ... }
-func testRenderTextCompactsWhitespace() throws { ... }
+func testPolicyForThresholds()  {...}
+func testRenderSwiftElidesNonPublicBodiesUnderPolicy() throws  {...}
+func testRenderTextCompactsWhitespace() throws  {...}
 }
 FILE: Tests/LLMintyTests/ScoringTests.swift
 
 import XCTest
 @testable import llminty
 final class ScoringTests: XCTestCase {
-func testScoringWeightsAndEntrypointBonus() { ... }
+func testScoringWeightsAndEntrypointBonus()  {...}
+}
+FILE: Package.resolved
+
+{
+"originHash" : "fafcfb29799827807329c51102552f0f529ef7ef4c8dffc7051b9365efb15aa9",
+"pins" : [
+{
+"identity" : "swift-syntax",
+"kind" : "remoteSourceControl",
+"location" : "https://github.com/swiftlang/swift-syntax.git",
+"state" : {
+"revision" : "f99ae8aa18f0cf0d53481901f88a0991dc3bd4a2",
+"version" : "601.0.1"
+}
+}
+],
+"version" : 3
 }
 FILE: Package.swift
 
@@ -668,30 +528,71 @@ path: "Tests/LLMintyTests"
 )
 ]
 )
+FILE: README.md
+
+# LLMinty
+Single-command CLI to emit a token-efficient bundle of a Swift repository for LLMs.
+- **Command:** `llminty` (no args)
+- **Output:** `./minty.txt`
+- **Ignore file:** `.mintyignore` (gitignore semantics: globs, `!` negation, `/`-anchored, dir `/` suffix, `#` comments)
+- **Deterministic:** Given the same repo & ignore, output is deterministic.
+## Install
+```bash
+git clone <your fork>
+cd LLMinty
+swift build -c release
+cp .build/release/llminty /usr/local/bin/
+````
+> If SwiftSyntax version mismatches your toolchain, pin `swift-syntax` to your local Swift’s compatible tag.
+## Use
+```bash
+cd /path/to/your/swift/repo
+llminty
+# -> prints: Created ./minty.txt (<n> files)
+```
+```
+---
+### How this satisfies your spec (with your requested customizations)
+- **CLI name:** `llminty` (binary); project name **LLMinty**.
+- **Output file:** `minty.txt` (at repo root).
+- **Ignore file:** `.mintyignore` (gitignore semantics, including `!` re‑include and dir patterns).
+- **Built‑in safe excludes:** Implemented in `BuiltInExcludes.swift`, including self‑exclude of `minty.txt`; users can re‑include via negation.
+- **High‑level flow:** Implemented end‑to‑end in `App.run()`.
+- **Ranking (0–1):** Uses AST/graph‑only signals:
+- Fan‑in and PageRank centrality over file dependency graph (`GraphCentrality`).
+- Public API surface (public/open, protocols ×2).
+- Type/protocol influence (inbound refs to declared types).
+- Complexity via cyclomatic proxies (control‑flow nodes, boolean ops).
+- Entrypoint indicator (`@main`, SwiftUI `App`, or top‑level code).
+- **Rendering (token‑minimized):**
+- **Swift:** Always preserves signatures, generics/where clauses, conformances, access modifiers, and imports. Bodies are retained or elided per score thresholds; very long bodies trimmed in place. One‑body‑per‑type enforced where applicable.
+- **JSON:** Keeps representative subset, head+tail arrays, with `// trimmed ...` notes; preserves order.
+- **Other text/binaries:** Condensed or replaced with compact placeholders with type/size.
+- **Ordering:** Dependency‑aware topo order; tie‑break by higher score, then stable path.
+- **Deterministic:** Stable scans, stable path sort, deterministic conflict resolution.
+- **Performance:** Directory short‑circuiting; 2 MB per‑file cap; binary detection; no traversal outside CWD.
+- **Security & Safety:** Never leaves working directory; unknown extensions treated as non‑text.
+- **CLI UX:** On success prints **exactly**:
 FILE: Tests/LLMintyTests/FileScannerTests.swift
 
 // Tests/LLMintyTests/FileScannerTests.swift
 import XCTest
 @testable import llminty
 final class FileScannerTests: XCTestCase {
-func testScanningKindsAndIgnores() throws { ... }
+func testScanningKindsAndIgnores() throws  {...}
 }
 FILE: Tests/LLMintyTests/IgnoreMatcherTests.swift
 
 import XCTest
 @testable import llminty
 final class IgnoreMatcherTests: XCTestCase {
-func testGlobAnchorsAndNegation() throws { ... }
+func testGlobAnchorsAndNegation() throws  {...}
 }
 FILE: Tests/LLMintyTests/JSONReducerTests.swift
 
 import XCTest
 @testable import llminty
 final class JSONReducerTests: XCTestCase {
-func testArrayAndDictReduction() { ... }
-func testPassThroughOnInvalidJSON() {
-let notJSON = "hello"
-let out = JSONReducer.reduceJSONPreservingStructure(text: notJSON)
-XCTAssertEqual(out, notJSON)
-}
+func testArrayAndDictReduction()  {...}
+func testPassThroughOnInvalidJSON()  {...}
 }

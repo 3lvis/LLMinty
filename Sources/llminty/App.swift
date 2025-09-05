@@ -39,7 +39,7 @@ func postProcessMinty(_ s: String) -> String {
         .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
 
     // 2) Keep exactly one blank after each header; drop other blank-only lines
-    let lines = pre.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" }).map(String.init)
+    let lines = pre.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
     var result: [String] = []
     result.reserveCapacity(lines.count)
     var justSawHeader = false
@@ -69,63 +69,82 @@ func postProcessMinty(_ s: String) -> String {
 public struct LLMintyApp {
     public init() {}
 
-    public func run() throws {
-        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let outName = "minty.txt"
+    public func run() throws  {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: fm.currentDirectoryPath)
 
-        // Read user ignore
-        let ignoreURL = cwd.appendingPathComponent(".mintyignore")
+        // Read .mintyignore if present
+        let ignoreURL = root.appendingPathComponent(".mintyignore")
         let userIgnore = (try? String(contentsOf: ignoreURL, encoding: .utf8)) ?? ""
 
-        // Build matcher
-        let builtIns = BuiltInExcludes.defaultPatterns(outputFileName: outName)
-        let matcher = try IgnoreMatcher(builtInPatterns: builtIns, userFileText: userIgnore)
+        let matcher = try IgnoreMatcher(
+            builtInPatterns: BuiltInExcludes.defaultPatterns(outputFileName: "minty.txt"),
+            userFileText: userIgnore
+        )
 
         // Scan
-        let scanner = FileScanner(root: cwd, matcher: matcher)
-        let repoFiles = try scanner.scan()
+        let scanner = FileScanner(root: root, matcher: matcher)
+        let files = try scanner.scan()
 
-        // Analyze swift files
+        // Analyze Swift files
         let analyzer = SwiftAnalyzer()
-        let analyzed = try analyzer.analyze(files: repoFiles)
+        let analyzedSwift = try analyzer.analyze(files: files)
+        var analyzedByPath: [String: AnalyzedFile] = Dictionary(
+            uniqueKeysWithValues: analyzedSwift.map { ($0.file.relativePath, $0) }
+        )
 
-        // Score + order
-        let scoring = Scoring()
-        let scored = scoring.score(analyzed: analyzed)
+        // Create stub analyzed entries for non-swift files (so we can score/order deterministically)
+        for f in files where analyzedByPath[f.relativePath] == nil {
+            let text: String
+            switch f.kind {
+            case .json, .text, .unknown:
+                text = (try? String(contentsOf: f.absoluteURL, encoding: .utf8)) ?? ""
+            case .binary:
+                text = ""
+            case .swift:
+                text = "" // already analyzed above
+            }
+            analyzedByPath[f.relativePath] = AnalyzedFile(
+                file: f,
+                text: text,
+                declaredTypes: [],
+                publicAPIScoreRaw: 0,
+                referencedTypes: [:],
+                complexity: 0,
+                isEntrypoint: false,
+                outgoingFileDeps: [],
+                inboundRefCount: 0
+            )
+        }
+
+        // Score
+        let allAnalyzed = files.compactMap { analyzedByPath[$0.relativePath] }
+        let scorer = Scoring()
+        let scored = scorer.score(analyzed: allAnalyzed)
+
+        // Order (dependency-aware)
         let ordered = GraphCentrality.orderDependencyAware(scored)
 
         // Render
         let renderer = Renderer()
-        var rendered: [RenderedFile] = []
-        rendered.reserveCapacity(ordered.count)
+        var chunks: [String] = []
+        chunks.reserveCapacity(ordered.count * 4)
+
         for s in ordered {
-            let r = try renderer.render(file: s, score: s.score)
-            rendered.append(r)
+            let rendered = try renderer.render(file: s, score: s.score)
+            chunks.append("FILE: \(rendered.relativePath)")
+            chunks.append("") // exactly one blank line after header (will be preserved)
+            chunks.append(rendered.content.trimmingCharacters(in: .whitespacesAndNewlines))
         }
 
-        // Bundle
-        var bundle: [String] = []
-        bundle.reserveCapacity(rendered.count * 2)
-        for r in rendered {
-            bundle.append("FILE: \(r.relativePath)")
-            bundle.append("") // one blank after header
-            bundle.append(r.content.trimRightSpaces())
-        }
-        let joined = bundle.joined(separator: "\n")
-        let final = postProcessMinty(joined)
+        let raw = chunks.joined(separator: "\n") + "\n"
+        let post = postProcessMinty(raw)
 
         // Write
-        let outURL = cwd.appendingPathComponent(outName)
-        try final.write(to: outURL, atomically: true, encoding: .utf8)
+        let outURL = root.appendingPathComponent("minty.txt")
+        try post.write(to: outURL, atomically: true, encoding: .utf8)
 
-        print("Created ./\(outName) (\(rendered.count) files)")
-    }
-}
-
-private extension String {
-    func trimRightSpaces() -> String {
-        var s = self
-        while s.last == " " { _ = s.removeLast() }
-        return s
+        // Success message (exact)
+        print("Created ./minty.txt (\(ordered.count) files)")
     }
 }

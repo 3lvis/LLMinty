@@ -7,76 +7,86 @@ enum JSONReducer {
     private static let tail = 2
     private static let dictKeep = 6
 
-    static func reduceJSONPreservingStructure(text: String) -> String {
+    static func reduceJSONPreservingStructure(text: String) -> String  {
         guard let data = text.data(using: .utf8) else { return text }
-        let obj = try? JSONSerialization.jsonObject(with: data, options: [])
-        guard let json = obj else { return text } // pass-through on invalid JSON
-
-        let reduced = reduce(json, seen: [])
+        let opts: JSONSerialization.ReadingOptions = [.fragmentsAllowed, .mutableContainers, .mutableLeaves]
+        guard let any = try? JSONSerialization.jsonObject(with: data, options: opts) else {
+            // Not valid JSON: pass through
+            return text
+        }
+        let reduced = reduce(any, seen: [])
         return stringify(reduced)
     }
 
-    private static func reduce(_ v: Any, seen: Set<ObjectIdentifier>) -> Any {
-        if let a = v as? [Any] { return reduceArray(a, seen: seen) }
-        if let d = v as? [String: Any] { return reduceDict(d, seen: seen) }
+    private static func reduce(_ v: Any, seen: Set<ObjectIdentifier>) -> Any  {
+        if let a = v as? [Any] {
+            return reduceArray(a, seen: seen)
+        }
+        if let d = v as? [String: Any] {
+            return reduceDict(d, seen: seen)
+        }
         return v
     }
 
-    private static func reduceArray(_ a: [Any], seen: Set<ObjectIdentifier>) -> Any {
-        if a.count <= head + tail {
-            return a.map { reduce($0, seen: seen) }
-        }
-        let prefix = a.prefix(head).map { reduce($0, seen: seen) }
-        let suffix = a.suffix(tail).map { reduce($0, seen: seen) }
-        let omitted = a.count - (head + tail)
-        return ["__trimmed_array__": [
-            "head": prefix,
-            "omitted": omitted,
-            "tail": suffix
-        ]]
-    }
-
-    private static func reduceDict(_ d: [String: Any], seen: Set<ObjectIdentifier>) -> Any {
-        // Keep at most dictKeep keys; preserve key order by sorting keys to keep determinism
-        let keys = d.keys.sorted()
-        var out: [String: Any] = [:]
-        var kept = 0
-        for k in keys {
-            if kept >= dictKeep { break }
-            out[k] = reduce(d[k] as Any, seen: seen)
-            kept += 1
-        }
-        if d.count > dictKeep {
-            out["__trimmed_dict_keys__"] = Array(keys.dropFirst(dictKeep))
-        }
+    private static func reduceArray(_ a: [Any], seen: Set<ObjectIdentifier>) -> Any  {
+        if a.count <= head + tail { return a.map { reduce($0, seen: seen) } }
+        var out: [Any] = []
+        for i in 0..<min(head, a.count) { out.append(reduce(a[i], seen: seen)) }
+        out.append("/* … \(a.count - head - tail) elided … */")
+        for i in max(a.count - tail, 0)..<a.count { out.append(reduce(a[i], seen: seen)) }
         return out
     }
 
-    private static func stringify(_ v: Any) -> String {
-        // Pretty-print deterministic JSON-ish text with comments embedded as fields
-        if let a = v as? [Any] {
-            return "[\n" + a.enumerated().map { (i, e) in
-                "  " + stringify(e)
-            }.joined(separator: ",\n") + "\n]"
-        } else if let d = v as? [String: Any] {
-            let keys = d.keys.sorted()
-            let body = keys.map { k in
-                "  " + "\"\(escape(k))\": " + stringify(d[k] as Any)
-            }.joined(separator: ",\n")
-            return "{\n" + body + "\n}"
-        } else if let s = v as? String {
-            return "\"\(escape(s))\""
-        } else if v is NSNull {
-            return "null"
+    private static func reduceDict(_ d: [String: Any], seen: Set<ObjectIdentifier>) -> Any  {
+        // Keep up to dictKeep keys, chosen by lexical key order for determinism
+        let keys = d.keys.sorted()
+        if keys.count <= dictKeep {
+            var out: [String: Any] = [:]
+            for k in keys { out[k] = reduce(d[k]!, seen: seen) }
+            return out
         } else {
-            // numbers, bools
-            return "\(v)"
+            var out: [String: Any] = [:]
+            let keep = keys.prefix(dictKeep)
+            for k in keep { out[k] = reduce(d[k]!, seen: seen) }
+            out["/* … \(keys.count - dictKeep) keys elided … */"] = "/* structure preserved */"
+            return out
         }
     }
-    
-    private static func escape(_ s: String) -> String {
+
+    private static func stringify(_ v: Any) -> String  {
+        // Deterministic compact-ish JSON with our inline /* elided */ markers.
+        func s(_ val: Any) -> String {
+            switch val {
+            case let n as NSNumber:
+                if CFGetTypeID(n) == CFBooleanGetTypeID() {
+                    return n.boolValue ? "true" : "false"
+                } else {
+                    return n.stringValue
+                }
+            case let s as String:
+                // If it looks like our marker "/* ... */", leave as raw; else quote+escape
+                if s.hasPrefix("/*") && s.hasSuffix("*/") { return s }
+                return "\"\(escape(s))\""
+            case let a as [Any]:
+                return "[" + a.map { s($0) }.joined(separator: ", ") + "]"
+            case let d as [String: Any]:
+                // Sort keys for determinism
+                let keys = d.keys.sorted()
+                let pairs = keys.map { "\"\(escape($0))\": \(s(d[$0]!))" }
+                return "{ " + pairs.joined(separator: ", ") + " }"
+            case _ as NSNull:
+                return "null"
+            default:
+                // Fallback to string description
+                return "\"\(escape(String(describing: val)))\""
+            }
+        }
+        return s(v) + "\n"
+    }
+
+    private static func escape(_ s: String) -> String  {
         var out = ""
-        out.reserveCapacity(s.count)
+        out.reserveCapacity(s.count + 8)
         for ch in s {
             switch ch {
             case "\\": out.append("\\\\")
