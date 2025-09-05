@@ -149,7 +149,7 @@ final class Renderer {
 
             // Functions
             override func visit(_ node: FunctionDeclSyntax) -> DeclSyntax {
-                guard let body = node.body else { return DeclSyntax(node) }
+                guard node.body != nil else { return DeclSyntax(node) }
                 let isPublic = node.modifiers.containsPublicOrOpen
                 if shouldKeepBody(isPublic: isPublic) { return DeclSyntax(node) }
                 let replaced = node.with(\.body, emptyBlock())
@@ -158,21 +158,20 @@ final class Renderer {
 
             // Inits
             override func visit(_ node: InitializerDeclSyntax) -> DeclSyntax {
-                guard let body = node.body else { return DeclSyntax(node) }
-                _ = body // silence unused if optimization elides call
+                guard node.body != nil else { return DeclSyntax(node) }
                 let isPublic = node.modifiers.containsPublicOrOpen
                 if shouldKeepBody(isPublic: isPublic) { return DeclSyntax(node) }
                 let replaced = node.with(\.body, emptyBlock())
                 return DeclSyntax(replaced)
             }
 
-            // Subscripts (replace accessor block with empty block syntactically)
+            // Subscripts (replace accessor block with empty accessor list)
             override func visit(_ node: SubscriptDeclSyntax) -> DeclSyntax {
-                if let accessor = node.accessorBlock {
+                if node.accessorBlock != nil {
                     let isPublic = node.modifiers.containsPublicOrOpen
                     if shouldKeepBody(isPublic: isPublic) { return DeclSyntax(node) }
-                    // Replace with empty accessor block { }
-                    let empty = AccessorBlockSyntax(accessors: .accessors(AccessorListSyntax([])))
+                    let emptyList = AccessorDeclListSyntax([])
+                    let empty = AccessorBlockSyntax(accessors: .accessors(emptyList))
                     let replaced = node.with(\.accessorBlock, empty)
                     return DeclSyntax(replaced)
                 }
@@ -183,11 +182,10 @@ final class Renderer {
         let tree = Parser.parse(source: text)
         let rewriter = Elider(policy: policy)
         let out = rewriter.visit(tree)
-        // Conservative whitespace pass for stability
         return lightlyCondenseWhitespace(out.description)
     }
 }
 
 extension StringProtocol {
-    var isNewline: Bool { return self == "\n" || self == "\r\n" }
+    var isNewline: Bool { self == "\n" || self == "\r\n" }
 }

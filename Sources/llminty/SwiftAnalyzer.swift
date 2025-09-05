@@ -7,19 +7,12 @@ import SwiftSyntax
 struct AnalyzedFile {
     let file: RepoFile
     let text: String
-    // Declarations in this file (type names)
     var declaredTypes: Set<String>
-    // Public/open API weighted counts (protocols ×2)
     var publicAPIScoreRaw: Int
-    // Referenced type identifiers (simple heuristic)
     var referencedTypes: [String: Int] // name -> occurrences
-    // Cyclomatic complexity sum across functions (very rough)
     var complexity: Int
-    // Heuristic: does this target declare @main or SwiftUI.App or have top-level code?
     var isEntrypoint: Bool
-    // Outgoing edges to other repo files by relative path (inferred via simple symbol map)
     var outgoingFileDeps: [String]
-    // Inbound count (how many other files reference this one)
     var inboundRefCount: Int
 }
 
@@ -28,7 +21,7 @@ struct AnalyzedFile {
 final class SwiftAnalyzer {
 
     func analyze(files: [RepoFile]) throws -> [AnalyzedFile] {
-        // Parse only Swift files; read text deterministically as UTF-8 (lossy ok)
+        // Parse only Swift files
         var analyzed: [AnalyzedFile] = []
         analyzed.reserveCapacity(files.count)
 
@@ -45,9 +38,6 @@ final class SwiftAnalyzer {
         }
 
         // Compute outgoing deps via referenced type → declared type mapping
-        var pathToIndex: [String: Int] = [:]
-        for (i, a) in analyzed.enumerated() { pathToIndex[a.file.relativePath] = i }
-
         for i in analyzed.indices {
             var deps = Set<String>()
             for (name, _) in analyzed[i].referencedTypes {
@@ -61,9 +51,7 @@ final class SwiftAnalyzer {
         // Compute inbound counts
         var inbound: [String: Int] = [:]
         for a in analyzed {
-            for dep in a.outgoingFileDeps {
-                inbound[dep, default: 0] += 1
-            }
+            for dep in a.outgoingFileDeps { inbound[dep, default: 0] += 1 }
         }
         for i in analyzed.indices {
             analyzed[i].inboundRefCount = inbound[analyzed[i].file.relativePath] ?? 0
@@ -78,8 +66,6 @@ final class SwiftAnalyzer {
         let c = SwiftCollector(context: &ctx)
         c.walk(tree)
 
-        // SwiftUI.App conformance implies entrypoint
-        // Already captured in collector; pass through
         return AnalyzedFile(
             file: RepoFile(relativePath: path, absoluteURL: URL(fileURLWithPath: path), isDirectory: false, kind: .swift, size: UInt64(text.utf8.count)),
             text: text,
@@ -110,7 +96,7 @@ private final class SwiftCollector: SyntaxVisitor {
     private var ctx: UnsafeMutablePointer<CollectorContext>
     private var typeStack: [String] = []
 
-    init(context: inout CollectorContext) {
+    init(context: inout CollectorContext)  {
         self.ctx = withUnsafeMutablePointer(to: &context) { $0 }
         super.init(viewMode: .sourceAccurate)
     }
@@ -124,7 +110,6 @@ private final class SwiftCollector: SyntaxVisitor {
         let name = node.name.text
         ctx.pointee.declaredTypes.insert(name)
         if node.modifiers.containsPublicOrOpen { ctx.pointee.publicAPIScoreRaw += 1 }
-        // SwiftUI.App conformance?
         if node.inheritanceClauseContains(type: "App") { ctx.pointee.isEntrypoint = true }
         typeStack.append(name)
         return .visitChildren
@@ -152,7 +137,7 @@ private final class SwiftCollector: SyntaxVisitor {
     override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind  {
         let name = node.name.text
         ctx.pointee.declaredTypes.insert(name)
-        if node.modifiers.containsPublicOrOpen { ctx.pointee.publicAPIScoreRaw += 2 } // public protocol weight 2
+        if node.modifiers.containsPublicOrOpen { ctx.pointee.publicAPIScoreRaw += 2 }
         typeStack.append(name)
         return .visitChildren
     }
@@ -164,7 +149,6 @@ private final class SwiftCollector: SyntaxVisitor {
     }
 
     override func visit(_ node: SourceFileSyntax) -> SyntaxVisitorContinueKind  {
-        // If any top-level item is not a decl, consider there is top-level code
         for item in node.statements {
             if item.item.as(DeclSyntax.self) == nil {
                 ctx.pointee.hasTopLevelCode = true
@@ -173,9 +157,9 @@ private final class SwiftCollector: SyntaxVisitor {
         }
         return .visitChildren
     }
-    override func visitPost(_ node: SourceFileSyntax)  { /* no-op */ }
+    override func visitPost(_ node: SourceFileSyntax)  { }
 
-    // Types referenced (IdentifierTypeSyntax and MemberTypeSyntax roots)
+    // Types referenced
     override func visit(_ node: IdentifierTypeSyntax) -> SyntaxVisitorContinueKind  {
         let n = node.name.text
         if !n.isEmpty { ctx.pointee.referencedTypes[n, default: 0] += 1 }
@@ -194,7 +178,7 @@ private final class SwiftCollector: SyntaxVisitor {
         case .keyword(.if), .keyword(.for), .keyword(.while), .keyword(.guard),
                 .keyword(.case), .keyword(.repeat), .keyword(.catch), .keyword(.switch):
             ctx.pointee.complexity += 1
-        case .spacedBinaryOperator(let op):
+        case .binaryOperator(let op):
             if op == "&&" || op == "||" { ctx.pointee.complexity += 1 }
         default:
             break
@@ -205,7 +189,8 @@ private final class SwiftCollector: SyntaxVisitor {
 
 // MARK: - Small helpers
 
-private extension DeclModifierListSyntax {
+// Make this module-internal so Rendering.swift can reuse it
+extension DeclModifierListSyntax {
     var containsPublicOrOpen: Bool {
         for m in self {
             let k = m.name.text
@@ -215,7 +200,7 @@ private extension DeclModifierListSyntax {
     }
 }
 
-private extension Optional where Wrapped == DeclModifierListSyntax {
+extension Optional where Wrapped == DeclModifierListSyntax {
     var containsPublicOrOpen: Bool { self?.containsPublicOrOpen ?? false }
 }
 

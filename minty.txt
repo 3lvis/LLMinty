@@ -14,192 +14,21 @@ let segments: [String] // split on '/'
 private let ordered: [Pattern]
 init(builtInPatterns: [String], userFileText: String) throws {
 var list: [Pattern] = []
-for p in builtInPatterns {
-if let pat = Self.parse(line: p) { list.append(pat) }
-}
+for p in builtInPatterns { if let pat = Self.parse(line: p) { list.append(pat) } }
 for line in userFileText.components(separatedBy: .newlines) {
 if let pat = Self.parse(line: line) { list.append(pat) }
 }
 self.ordered = list
 }
 // MARK: - Parser
-private static func parse(line: String) -> Pattern?  {...}
+private static func parse(line: String) -> Pattern?  { }
 // MARK: - Eval
-func isIgnored(_ relativePath: String, isDirectory: Bool) -> Bool  {...}
-private static func matchSegment(_ pat: String, _ txt: String) -> Bool  {...}
-private func match(pattern p: Pattern, pathSegments: [String]) -> Bool  {...}
+func isIgnored(_ relativePath: String, isDirectory: Bool) -> Bool  { }
+private static func match(pattern p: Pattern, pathSegments: [String]) -> Bool  { }
+// Segment matcher for '*' and '?'
+private static func matchSegment(_ pat: String, _ txt: String) -> Bool  { }
 // '**' matches zero or more segments. '*' matches within a segment (no '/').
-private static func matchFrom(patternSegs: [String], pathSegs: [String], startAt: Int) -> Bool  {...}
-}
-FILE: Sources/llminty/JSONReducer.swift
-
-import Foundation
-enum JSONReducer {
-// Head/Tail sample sizes
-private static let head = 3
-private static let tail = 2
-private static let dictKeep = 6
-static func reduceJSONPreservingStructure(text: String) -> String   {...}
-private static func reduce(_ v: Any, seen: Set<ObjectIdentifier>) -> Any   {...}
-private static func reduceArray(_ a: [Any], seen: Set<ObjectIdentifier>) -> Any   {...}
-private static func reduceDict(_ d: [String: Any], seen: Set<ObjectIdentifier>) -> Any   {...}
-private static func stringify(_ v: Any) -> String   {...}
-private static func escape(_ s: String) -> String   {...}
-}
-FILE: Sources/llminty/main.swift
-
-import Foundation
-// Top-level entrypoint for the executable target.
-// (Do NOT use @main if the module has any other top-level code.)
-do {
-try LLMintyApp().run()
-} catch {
-fputs("llminty: \(error.localizedDescription)\n", stderr)
-exit(1)
-}
-FILE: Tests/LLMintyTests/LLMintyTests.swift
-
-import XCTest
-@testable import llminty
-final class LLMintyTests: XCTestCase {
-// End-to-end: builds a mini project, runs the app, checks minty.txt framing and ignore behavior.
-func testEndToEndRunCreatesMintyFile() throws  {...}
-// Compaction policy: keep exactly one blank line after each FILE header, drop others,
-// but allow a single terminal blank line (trailing newline in the file).
-func testKeepsOneBlankAfterHeadersAndDropsOthers()  {...}
-}
-FILE: Tests/LLMintyTests/RenderingTests.swift
-
-import XCTest
-@testable import llminty
-final class RenderingTests: XCTestCase {
-func testPolicyForThresholds()  {...}
-func testRenderSwiftElidesNonPublicBodiesUnderPolicy() throws  {...}
-func testRenderTextCompactsWhitespace() throws  {...}
-}
-FILE: Tests/LLMintyTests/ScoringTests.swift
-
-import XCTest
-@testable import llminty
-final class ScoringTests: XCTestCase {
-func testScoringWeightsAndEntrypointBonus()  {...}
-}
-FILE: Package.resolved
-
-{
-"originHash" : "fafcfb29799827807329c51102552f0f529ef7ef4c8dffc7051b9365efb15aa9",
-"pins" : [
-{
-"identity" : "swift-syntax",
-"kind" : "remoteSourceControl",
-"location" : "https://github.com/swiftlang/swift-syntax.git",
-"state" : {
-"revision" : "f99ae8aa18f0cf0d53481901f88a0991dc3bd4a2",
-"version" : "601.0.1"
-}
-}
-],
-"version" : 3
-}
-FILE: Package.swift
-
-// swift-tools-version: 6.0
-import PackageDescription
-let package = Package(
-name: "LLMinty",
-platforms: [
-.macOS(.v13)
-],
-products: [
-.executable(name: "llminty", targets: ["llminty"])
-],
-dependencies: [
-// Match your Swift 6.1 toolchain. 601.x == SwiftSyntax for Swift 6.1
-.package(url: "https://github.com/swiftlang/swift-syntax.git", exact: "601.0.1")
-],
-targets: [
-.executableTarget(
-name: "llminty",
-dependencies: [
-.product(name: "SwiftParser", package: "swift-syntax"),
-.product(name: "SwiftSyntax", package: "swift-syntax")
-],
-path: "Sources/llminty"
-),
-.testTarget(
-name: "LLMintyTests",
-dependencies: ["llminty"],
-path: "Tests/LLMintyTests"
-)
-]
-)
-FILE: README.md
-
-# LLMinty
-Single-command CLI to emit a token-efficient bundle of a Swift repository for LLMs.
-- **Command:** `llminty` (no args)
-- **Output:** `./minty.txt`
-- **Ignore file:** `.mintyignore` (gitignore semantics: globs, `!` negation, `/`-anchored, dir `/` suffix, `#` comments)
-- **Deterministic:** Given the same repo & ignore, output is deterministic.
-## Install
-```bash
-git clone <your fork>
-cd LLMinty
-swift build -c release
-cp .build/release/llminty /usr/local/bin/
-````
-> If SwiftSyntax version mismatches your toolchain, pin `swift-syntax` to your local Swift’s compatible tag.
-## Use
-```bash
-cd /path/to/your/swift/repo
-llminty
-# -> prints: Created ./minty.txt (<n> files)
-```
-```
----
-### How this satisfies your spec (with your requested customizations)
-- **CLI name:** `llminty` (binary); project name **LLMinty**.
-- **Output file:** `minty.txt` (at repo root).
-- **Ignore file:** `.mintyignore` (gitignore semantics, including `!` re‑include and dir patterns).
-- **Built‑in safe excludes:** Implemented in `BuiltInExcludes.swift`, including self‑exclude of `minty.txt`; users can re‑include via negation.
-- **High‑level flow:** Implemented end‑to‑end in `App.run()`.
-- **Ranking (0–1):** Uses AST/graph‑only signals:
-- Fan‑in and PageRank centrality over file dependency graph (`GraphCentrality`).
-- Public API surface (public/open, protocols ×2).
-- Type/protocol influence (inbound refs to declared types).
-- Complexity via cyclomatic proxies (control‑flow nodes, boolean ops).
-- Entrypoint indicator (`@main`, SwiftUI `App`, or top‑level code).
-- **Rendering (token‑minimized):**
-- **Swift:** Always preserves signatures, generics/where clauses, conformances, access modifiers, and imports. Bodies are retained or elided per score thresholds; very long bodies trimmed in place. One‑body‑per‑type enforced where applicable.
-- **JSON:** Keeps representative subset, head+tail arrays, with `// trimmed ...` notes; preserves order.
-- **Other text/binaries:** Condensed or replaced with compact placeholders with type/size.
-- **Ordering:** Dependency‑aware topo order; tie‑break by higher score, then stable path.
-- **Deterministic:** Stable scans, stable path sort, deterministic conflict resolution.
-- **Performance:** Directory short‑circuiting; 2 MB per‑file cap; binary detection; no traversal outside CWD.
-- **Security & Safety:** Never leaves working directory; unknown extensions treated as non‑text.
-- **CLI UX:** On success prints **exactly**:
-FILE: Tests/LLMintyTests/FileScannerTests.swift
-
-// Tests/LLMintyTests/FileScannerTests.swift
-import XCTest
-@testable import llminty
-final class FileScannerTests: XCTestCase {
-func testScanningKindsAndIgnores() throws  {...}
-}
-FILE: Tests/LLMintyTests/IgnoreMatcherTests.swift
-
-import XCTest
-@testable import llminty
-final class IgnoreMatcherTests: XCTestCase {
-func testGlobAnchorsAndNegation() throws  {...}
-}
-FILE: Tests/LLMintyTests/JSONReducerTests.swift
-
-import XCTest
-@testable import llminty
-final class JSONReducerTests: XCTestCase {
-func testArrayAndDictReduction()  {...}
-func testPassThroughOnInvalidJSON()  {...}
+private static func matchFrom(patternSegs: [String], pathSegs: [String], startAt: Int) -> Bool  { }
 }
 FILE: Sources/llminty/FileScanner.swift
 
@@ -259,25 +88,15 @@ results.append(RepoFile(relativePath: relClean, absoluteURL: url, isDirectory: f
 results.sort { $0.relativePath < $1.relativePath }
 return results
 }
-static func seemsBinary(url: URL) -> Bool  {...}
+static func seemsBinary(url: URL) -> Bool  { }
 }
 // MARK: - Path helpers
 private extension String {
-func removingPrefix(_ p: String) -> String {
-guard hasPrefix(p) else { return self }
-return String(dropFirst(p.count))
-}
-func relativePath(from root: String) -> String  {...}
+func removingPrefix(_ p: String) -> String  { }
+func relativePath(from root: String) -> String  { }
 }
 extension String {
-func path(replacingBase base: String) -> String  {...}
-}
-FILE: Tests/LLMintyTests/SwiftAnalyzerTests.swift
-
-import XCTest
-@testable import llminty
-final class SwiftAnalyzerTests: XCTestCase {
-func testEntrypointPublicAPIAndRefs() throws  {...}
+func path(replacingBase base: String) -> String  { }
 }
 FILE: Sources/llminty/SwiftAnalyzer.swift
 
@@ -288,25 +107,18 @@ import SwiftSyntax
 struct AnalyzedFile {
 let file: RepoFile
 let text: String
-// Declarations in this file (type names)
 var declaredTypes: Set<String>
-// Public/open API weighted counts (protocols ×2)
 var publicAPIScoreRaw: Int
-// Referenced type identifiers (simple heuristic)
 var referencedTypes: [String: Int] // name -> occurrences
-// Cyclomatic complexity sum across functions (very rough)
 var complexity: Int
-// Heuristic: does this target declare @main or SwiftUI.App or have top-level code?
 var isEntrypoint: Bool
-// Outgoing edges to other repo files by relative path (inferred via simple symbol map)
 var outgoingFileDeps: [String]
-// Inbound count (how many other files reference this one)
 var inboundRefCount: Int
 }
 // MARK: - Analyzer
 final class SwiftAnalyzer {
-func analyze(files: [RepoFile]) throws -> [AnalyzedFile]  {...}
-private func analyzeSwift(path: String, text: String) -> AnalyzedFile  {...}
+func analyze(files: [RepoFile]) throws -> [AnalyzedFile]  { }
+private func analyzeSwift(path: String, text: String) -> AnalyzedFile  { }
 }
 // MARK: - Collector with SwiftSyntax
 private struct CollectorContext {
@@ -321,27 +133,28 @@ var hasTopLevelCode: Bool = false
 private final class SwiftCollector: SyntaxVisitor {
 private var ctx: UnsafeMutablePointer<CollectorContext>
 private var typeStack: [String] = []
-init(context: inout CollectorContext)  {...}
-override func visit(_ node: ImportDeclSyntax) -> SyntaxVisitorContinueKind   {...}
-override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind   {...}
-override func visitPost(_ node: StructDeclSyntax)   {...}
-override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind   {...}
-override func visitPost(_ node: ClassDeclSyntax)   {...}
-override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind   {...}
-override func visitPost(_ node: EnumDeclSyntax)   {...}
-override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind   {...}
-override func visitPost(_ node: ProtocolDeclSyntax)   {...}
-override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind   {...}
-override func visit(_ node: SourceFileSyntax) -> SyntaxVisitorContinueKind   {...}
-override func visitPost(_ node: SourceFileSyntax)   {...}
-// Types referenced (IdentifierTypeSyntax and MemberTypeSyntax roots)
-override func visit(_ node: IdentifierTypeSyntax) -> SyntaxVisitorContinueKind   {...}
-override func visit(_ node: MemberTypeSyntax) -> SyntaxVisitorContinueKind   {...}
+init(context: inout CollectorContext)   { }
+override func visit(_ node: ImportDeclSyntax) -> SyntaxVisitorContinueKind   { }
+override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind   { }
+override func visitPost(_ node: StructDeclSyntax)   { }
+override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind   { }
+override func visitPost(_ node: ClassDeclSyntax)   { }
+override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind   { }
+override func visitPost(_ node: EnumDeclSyntax)   { }
+override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind   { }
+override func visitPost(_ node: ProtocolDeclSyntax)   { }
+override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind   { }
+override func visit(_ node: SourceFileSyntax) -> SyntaxVisitorContinueKind   { }
+override func visitPost(_ node: SourceFileSyntax)   { }
+// Types referenced
+override func visit(_ node: IdentifierTypeSyntax) -> SyntaxVisitorContinueKind   { }
+override func visit(_ node: MemberTypeSyntax) -> SyntaxVisitorContinueKind   { }
 // Complexity: count control-flow keywords and boolean ops
-override func visit(_ token: TokenSyntax) -> SyntaxVisitorContinueKind   {...}
+override func visit(_ token: TokenSyntax) -> SyntaxVisitorContinueKind   { }
 }
 // MARK: - Small helpers
-private extension DeclModifierListSyntax {
+// Make this module-internal so Rendering.swift can reuse it
+extension DeclModifierListSyntax {
 var containsPublicOrOpen: Bool {
 for m in self {
 let k = m.name.text
@@ -350,11 +163,11 @@ if k == "public" || k == "open" { return true }
 return false
 }
 }
-private extension Optional where Wrapped == DeclModifierListSyntax {
+extension Optional where Wrapped == DeclModifierListSyntax {
 var containsPublicOrOpen: Bool { self?.containsPublicOrOpen ?? false }
 }
 private extension StructDeclSyntax {
-func inheritanceClauseContains(type: String) -> Bool   {...}
+func inheritanceClauseContains(type: String) -> Bool   { }
 }
 FILE: Sources/llminty/Scoring.swift
 
@@ -424,65 +237,6 @@ pageRank: pr[a.file.relativePath] ?? 0.0
 return out
 }
 }
-FILE: Tests/LLMintyTests/GraphCentralityTests.swift
-
-import XCTest
-@testable import llminty
-final class GraphCentralityTests: XCTestCase {
-private func analyzed(_ path: String, deps: [String]) -> AnalyzedFile  {...}
-func testDependencyAwareOrder()  {...}
-}
-FILE: Sources/llminty/Rendering.swift
-
-import Foundation
-import SwiftParser
-import SwiftSyntax
-struct RenderedFile {
-let relativePath: String
-let content: String
-}
-final class Renderer {
-func render(file: ScoredFile, score: Double) throws -> RenderedFile {
-switch file.analyzed.file.kind {
-case .swift:
-let policy = policyFor(score: score)
-let content = try renderSwift(text: file.analyzed.text, policy: policy)
-return RenderedFile(relativePath: file.analyzed.file.relativePath, content: content)
-case .json:
-let reduced = JSONReducer.reduceJSONPreservingStructure(text: file.analyzed.text)
-return RenderedFile(relativePath: file.analyzed.file.relativePath, content: reduced)
-case .text, .unknown:
-let compact = compactText(file.analyzed.text)
-return RenderedFile(relativePath: file.analyzed.file.relativePath, content: compact)
-case .binary:
-let size = file.analyzed.file.size
-let type = (file.analyzed.file.relativePath as NSString).pathExtension.lowercased()
-// FIX: no escapes inside interpolation; just use normal literals.
-let placeholder = "/* binary \(type.isEmpty ? "file" : type) — \(size) bytes (omitted) */\n"
-return RenderedFile(relativePath: file.analyzed.file.relativePath, content: placeholder)
-}
-}
-// MARK: - Text compaction
-/// For .text / .unknown: trim trailing spaces per line, collapse runs of blank lines to a single blank.
-private func compactText(_ s: String) -> String  {...}
-/// For Swift bodies: a gentle pass that trims trailing spaces and collapses 3+ blank lines to 2.
-private func lightlyCondenseWhitespace(_ s: String) -> String  {...}
-// MARK: - Swift policies
-enum SwiftPolicy {
-case keepAllBodiesLightlyCondensed            // s ≥ 0.75
-case keepPublicBodiesElideOthers              // 0.50 ≤ s < 0.75
-case keepOneBodyPerTypeElideRest              // 0.25 ≤ s < 0.50
-case signaturesOnly                           // s < 0.25
-}
-func policyFor(score: Double) -> SwiftPolicy  {...}
-// MARK: - Swift rendering (mechanical, deterministic elision)
-/// Mechanically elide Swift function/initializer bodies according to policy.
-/// Uses SwiftSyntax positions to replace bodies in the original source, so signatures remain intact.
-func renderSwift(text: String, policy: SwiftPolicy) throws -> String  {...}
-}
-extension StringProtocol {
-var isNewline: Bool { return self == "\n" || self == "\r\n" }
-}
 FILE: Sources/llminty/GraphCentrality.swift
 
 import Foundation
@@ -531,35 +285,63 @@ return out
 /// Dependency-aware emission order:
 /// If A depends on B, emit B before A. When multiple nodes are available,
 /// prefer higher score, then lexicographic path.
-static func orderDependencyAware(_ scored: [ScoredFile]) -> [ScoredFile]   {...}
+static func orderDependencyAware(_ scored: [ScoredFile]) -> [ScoredFile]   { }
+}
+FILE: Sources/llminty/Rendering.swift
+
+import Foundation
+import SwiftParser
+import SwiftSyntax
+struct RenderedFile {
+let relativePath: String
+let content: String
+}
+final class Renderer {
+func render(file: ScoredFile, score: Double) throws -> RenderedFile {
+switch file.analyzed.file.kind {
+case .swift:
+let policy = policyFor(score: score)
+let content = try renderSwift(text: file.analyzed.text, policy: policy)
+return RenderedFile(relativePath: file.analyzed.file.relativePath, content: content)
+case .json:
+let reduced = JSONReducer.reduceJSONPreservingStructure(text: file.analyzed.text)
+return RenderedFile(relativePath: file.analyzed.file.relativePath, content: reduced)
+case .text, .unknown:
+let compact = compactText(file.analyzed.text)
+return RenderedFile(relativePath: file.analyzed.file.relativePath, content: compact)
+case .binary:
+let size = file.analyzed.file.size
+let type = (file.analyzed.file.relativePath as NSString).pathExtension.lowercased()
+let placeholder = "/* binary \(type.isEmpty ? "file" : type) — \(size) bytes (omitted) */\n"
+return RenderedFile(relativePath: file.analyzed.file.relativePath, content: placeholder)
+}
+}
+// MARK: - Text compaction
+/// For .text / .unknown: trim trailing spaces per line, collapse runs of blank lines to a single blank.
+private func compactText(_ s: String) -> String   { }
+/// For Swift bodies: a gentle pass that trims trailing spaces and collapses 3+ blank lines to 2.
+private func lightlyCondenseWhitespace(_ s: String) -> String   { }
+// MARK: - Swift policies
+enum SwiftPolicy {
+case keepAllBodiesLightlyCondensed            // s ≥ 0.75
+case keepPublicBodiesElideOthers              // 0.50 ≤ s < 0.75
+case keepOneBodyPerTypeElideRest              // 0.25 ≤ s < 0.50
+case signaturesOnly                           // s < 0.25
+}
+func policyFor(score: Double) -> SwiftPolicy   { }
+// MARK: - Swift rendering (mechanical, deterministic elision)
+/// Mechanically elide Swift function/initializer/subscript bodies according to policy.
+/// Uses SwiftSyntax rewriting to preserve signatures verbatim.
+func renderSwift(text: String, policy: SwiftPolicy) throws -> String   { }
+}
+extension StringProtocol {
+var isNewline: Bool { self == "\n" || self == "\r\n" }
 }
 FILE: Sources/llminty/App.swift
 
 import Foundation
 enum BuiltInExcludes {
-static func defaultPatterns(outputFileName: String) -> [String] {
-// Users can re-include via .mintyignore negation (!)
-return [
-// VCS / editor
-".git/", ".gitignore", ".gitattributes", ".DS_Store", ".idea/", ".vscode/", ".svn/", ".hg/",
-// SwiftPM
-".build/", ".swiftpm/",
-// Xcode
-"DerivedData/", "*.xcodeproj/", "*.xcworkspace/", "xcuserdata/",
-// Apple bundles/outputs
-"*.app/", "*.appex/", "*.framework/", "*.dSYM/", "*.xcarchive/",
-// Dependency managers
-"Pods/", "Carthage/",
-// Assets / binary noise (wide net by default)
-"*.xcassets/", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.heic", "*.pdf",
-"*.svg", "*.webp", "*.ttf", "*.otf", "*.woff", "*.woff2",
-"*.zip", "*.tar", "*.tar.gz", "*.rar", "*.7z",
-"*.mp3", "*.wav", "*.aiff", "*.m4a", "*.mp4", "*.mov",
-"*.bin", "*.dat",
-// Self-exclude
-outputFileName
-]
-}
+static func defaultPatterns(outputFileName: String) -> [String]  { }
 }
 /// Aggressively trims blank lines for final output while keeping exactly one
 /// blank line after each "FILE: " header. Also:
@@ -567,38 +349,131 @@ outputFileName
 /// - collapses 3+ newlines to 2 during pre-pass,
 /// - removes all other blank-only lines.
 /// Returns a string that always ends with a single trailing newline.
-func postProcessMinty(_ s: String) -> String {
-// 1) Trim trailing spaces and collapse extreme newline runs
-let pre = s
-.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression)
-.replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
-// 2) Keep exactly one blank after each header; drop other blank-only lines
-let lines = pre.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
-var result: [String] = []
-result.reserveCapacity(lines.count)
-var justSawHeader = false
-for line in lines {
-let trimmed = line.trimmingCharacters(in: .whitespaces)
-if line.hasPrefix("FILE: ") {
-result.append(trimmed)       // store header without trailing spaces
-justSawHeader = true
-continue
-}
-if trimmed.isEmpty {
-if justSawHeader {
-result.append("")        // keep one blank after the header
-}
-// else: drop blank line
-} else {
-result.append(trimmed)       // keep non-blank (trimmed right/left)
-justSawHeader = false
-}
-}
-// 3) Single trailing newline
-let joined = result.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-return joined + "\n"
-}
+func postProcessMinty(_ s: String) -> String  { }
 public struct LLMintyApp {
-public init() {}
-public func run() throws   {...}
+public init()  { }
+public func run() throws   { }
+}
+FILE: Tests/LLMintyTests/GraphCentralityTests.swift
+
+import XCTest
+@testable import llminty
+final class GraphCentralityTests: XCTestCase {
+private func analyzed(_ path: String, deps: [String]) -> AnalyzedFile  { }
+func testDependencyAwareOrder()  { }
+}
+FILE: Sources/llminty/JSONReducer.swift
+
+import Foundation
+enum JSONReducer {
+// Head/Tail sample sizes
+private static let head = 3
+private static let tail = 2
+private static let dictKeep = 6
+static func reduceJSONPreservingStructure(text: String) -> String   { }
+private static func reduce(_ v: Any, seen: Set<ObjectIdentifier>) -> Any   { }
+private static func reduceArray(_ a: [Any], seen: Set<ObjectIdentifier>) -> Any   { }
+private static func reduceDict(_ d: [String: Any], seen: Set<ObjectIdentifier>) -> Any   { }
+private static func stringify(_ v: Any) -> String   { }
+private static func escape(_ s: String) -> String   { }
+}
+FILE: Sources/llminty/main.swift
+
+import Foundation
+// Top-level entrypoint for the executable target.
+// (Do NOT use @main if the module has any other top-level code.)
+do {
+try LLMintyApp().run()
+} catch {
+fputs("llminty: \(error.localizedDescription)\n", stderr)
+exit(1)
+}
+FILE: Tests/LLMintyTests/SwiftAnalyzerTests.swift
+
+import XCTest
+@testable import llminty
+final class SwiftAnalyzerTests: XCTestCase {
+func testEntrypointPublicAPIAndRefs() throws  { }
+}
+FILE: Tests/LLMintyTests/LLMintyTests.swift
+
+import XCTest
+@testable import llminty
+final class LLMintyTests: XCTestCase {
+// End-to-end: builds a mini project, runs the app, checks minty.txt framing and ignore behavior.
+func testEndToEndRunCreatesMintyFile() throws  { }
+// Compaction policy: keep exactly one blank line after each FILE header, drop others,
+// but allow a single terminal blank line (trailing newline in the file).
+func testKeepsOneBlankAfterHeadersAndDropsOthers()  { }
+}
+FILE: Tests/LLMintyTests/RenderingTests.swift
+
+import XCTest
+@testable import llminty
+final class RenderingTests: XCTestCase {
+func testPolicyForThresholds()  { }
+func testRenderSwiftElidesNonPublicBodiesUnderPolicy() throws  { }
+func testRenderTextCompactsWhitespace() throws  { }
+}
+FILE: Tests/LLMintyTests/ScoringTests.swift
+
+import XCTest
+@testable import llminty
+final class ScoringTests: XCTestCase {
+func testScoringWeightsAndEntrypointBonus()  { }
+}
+FILE: Package.swift
+
+// swift-tools-version: 6.0
+import PackageDescription
+let package = Package(
+name: "LLMinty",
+platforms: [
+.macOS(.v13)
+],
+products: [
+.executable(name: "llminty", targets: ["llminty"])
+],
+dependencies: [
+// Match your Swift 6.1 toolchain. 601.x == SwiftSyntax for Swift 6.1
+.package(url: "https://github.com/swiftlang/swift-syntax.git", exact: "601.0.1")
+],
+targets: [
+.executableTarget(
+name: "llminty",
+dependencies: [
+.product(name: "SwiftParser", package: "swift-syntax"),
+.product(name: "SwiftSyntax", package: "swift-syntax")
+],
+path: "Sources/llminty"
+),
+.testTarget(
+name: "LLMintyTests",
+dependencies: ["llminty"],
+path: "Tests/LLMintyTests"
+)
+]
+)
+FILE: Tests/LLMintyTests/FileScannerTests.swift
+
+// Tests/LLMintyTests/FileScannerTests.swift
+import XCTest
+@testable import llminty
+final class FileScannerTests: XCTestCase {
+func testScanningKindsAndIgnores() throws  { }
+}
+FILE: Tests/LLMintyTests/IgnoreMatcherTests.swift
+
+import XCTest
+@testable import llminty
+final class IgnoreMatcherTests: XCTestCase {
+func testGlobAnchorsAndNegation() throws  { }
+}
+FILE: Tests/LLMintyTests/JSONReducerTests.swift
+
+import XCTest
+@testable import llminty
+final class JSONReducerTests: XCTestCase {
+func testArrayAndDictReduction()  { }
+func testPassThroughOnInvalidJSON()  { }
 }

@@ -15,9 +15,7 @@ struct IgnoreMatcher {
 
     init(builtInPatterns: [String], userFileText: String) throws {
         var list: [Pattern] = []
-        for p in builtInPatterns {
-            if let pat = Self.parse(line: p) { list.append(pat) }
-        }
+        for p in builtInPatterns { if let pat = Self.parse(line: p) { list.append(pat) } }
         for line in userFileText.components(separatedBy: .newlines) {
             if let pat = Self.parse(line: line) { list.append(pat) }
         }
@@ -30,25 +28,15 @@ struct IgnoreMatcher {
         guard !s.isEmpty, !s.hasPrefix("#") else { return nil }
 
         var negated = false
-        if s.first == "!" {
-            negated = true
-            s.removeFirst()
-        }
+        if s.first == "!" { negated = true; s.removeFirst() }
         s = s.trimmingCharacters(in: .whitespaces)
 
         var dirOnly = false
-        if s.hasSuffix("/") {
-            dirOnly = true
-            s.removeLast()
-        }
+        if s.hasSuffix("/") { dirOnly = true; s.removeLast() }
 
         var anchorRoot = false
-        if s.hasPrefix("/") {
-            anchorRoot = true
-            s.removeFirst()
-        }
+        if s.hasPrefix("/") { anchorRoot = true; s.removeFirst() }
 
-        // collapse duplicate slashes for stability
         while s.contains("//") { s = s.replacingOccurrences(of: "//", with: "/") }
         if s.isEmpty { return nil }
 
@@ -67,24 +55,20 @@ struct IgnoreMatcher {
             if p.dirOnly && !isDirectory { continue }
             let matched: Bool
             if p.anchorRoot {
-                matched = Self.match(pattern: p, pathSegments: parts, startAt: 0)
+                matched = Self.matchFrom(patternSegs: p.segments, pathSegs: parts, startAt: 0)
             } else {
                 // Try matching at any starting segment boundary
                 var found = false
                 if parts.isEmpty {
-                    found = Self.match(pattern: p, pathSegments: parts, startAt: 0)
+                    found = Self.matchFrom(patternSegs: p.segments, pathSegs: parts, startAt: 0)
                 } else {
                     for i in 0...max(0, parts.count - 1) {
-                        if Self.match(pattern: p, pathSegments: parts, startAt: i) { found = true; break }
+                        if Self.matchFrom(patternSegs: p.segments, pathSegs: parts, startAt: i) { found = true; break }
                     }
                 }
                 matched = found
             }
-
-            if matched {
-                // last match wins
-                ignored = !p.negated
-            }
+            if matched { ignored = !p.negated } // last match wins
         }
         return ignored
     }
@@ -95,13 +79,9 @@ struct IgnoreMatcher {
 
     // Segment matcher for '*' and '?'
     private static func matchSegment(_ pat: String, _ txt: String) -> Bool {
-        // simple glob within segment
-        var pi = pat.startIndex
-        var ti = txt.startIndex
-
-        func recurse(_ nextPi: String.Index, _ tFrom: String.Index) -> Bool {
-            var i = nextPi
-            var j = tFrom
+        func recurse(_ pi: String.Index, _ ti: String.Index) -> Bool {
+            var i = pi
+            var j = ti
             while i < pat.endIndex {
                 let pc = pat[i]
                 if pc == "*" {
@@ -127,17 +107,15 @@ struct IgnoreMatcher {
             }
             return j == txt.endIndex
         }
-        return recurse(pi, ti)
+        return recurse(pat.startIndex, txt.startIndex)
     }
 
     // '**' matches zero or more segments. '*' matches within a segment (no '/').
     private static func matchFrom(patternSegs: [String], pathSegs: [String], startAt: Int) -> Bool {
-        // Backtracking over segments
         func dfs(_ pi: Int, _ ti: Int) -> Bool {
             if pi == patternSegs.count { return ti == pathSegs.count }
             let seg = patternSegs[pi]
             if seg == "**" {
-                // match zero or more segments
                 if pi == patternSegs.count - 1 { return true } // trailing '**' consumes rest
                 var k = ti
                 while k <= pathSegs.count {
