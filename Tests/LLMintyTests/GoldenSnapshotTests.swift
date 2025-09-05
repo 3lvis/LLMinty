@@ -4,63 +4,120 @@ import XCTest
 
 final class GoldenSnapshotTests: XCTestCase {
 
+    private struct RegenSpec: Codable { var should_generate: Bool }
+
+    private var fixturesDir: URL {
+        URL(fileURLWithPath: #file)
+            .deletingLastPathComponent() // GoldenSnapshotTests.swift
+            .appendingPathComponent("Fixtures", isDirectory: true)
+    }
+
+    private var zipURL: URL { fixturesDir.appendingPathComponent("LLMinty-nohidden.zip") }
+    private var expectedURL: URL { fixturesDir.appendingPathComponent("expected_minty.txt") }
+    private var regenURL: URL { fixturesDir.appendingPathComponent("regenerate_contract.json") }
+
     func testGoldenAgainstSnapshotFixtures() throws {
-        guard let zip = TestSupport.fixtureURLIfExists("LLMinty-nohidden.zip") else {
-            throw XCTSkip("Missing Fixtures/LLMinty-nohidden.zip; skipping golden test.")
+        guard FileManager.default.fileExists(atPath: zipURL.path) else {
+            throw XCTSkip("No Fixtures/LLMinty-nohidden.zip; skipping")
         }
-        guard let expectedURL = TestSupport.fixtureURLIfExists("expected_minty.txt") else {
-            throw XCTSkip("Missing Fixtures/expected_minty.txt; skipping golden test.")
+        guard FileManager.default.fileExists(atPath: expectedURL.path) else {
+            throw XCTSkip("No Fixtures/expected_minty.txt; run regeneration once.")
         }
 
-        let fm = FileManager.default
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("llminty-golden-\(UUID().uuidString)")
-        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: tmp) }
+        let actual = try runMintyOnZippedSnapshot(zipURL)
+        let expected = try String(contentsOf: expectedURL, encoding: .utf8)
 
-        let root = try TestSupport.unzip(zip, to: tmp)
-        let actualText = TestSupport.normalized(try TestSupport.runLLMinty(in: root))
-        let expectedText = TestSupport.normalized(try String(contentsOf: expectedURL, encoding: .utf8))
-
-        if let diff = TestSupport.diffLines(expected: expectedText, actual: actualText) {
-            XCTFail("Golden mismatch.\n" + diff)
+        if actual != expected {
+            let aLines = actual.split(separator: "\n", omittingEmptySubsequences: false)
+            let eLines = expected.split(separator: "\n", omittingEmptySubsequences: false)
+            let maxLines = min(aLines.count, eLines.count)
+            var firstDiff = -1
+            for i in 0..<maxLines where aLines[i] != eLines[i] { firstDiff = i; break }
+            if firstDiff == -1, aLines.count != eLines.count { firstDiff = maxLines }
+            let explain: String
+            if firstDiff >= 0 {
+                let e = firstDiff < eLines.count ? eLines[firstDiff] : "<EOF>"
+                let a = firstDiff < aLines.count ? aLines[firstDiff] : "<EOF>"
+                explain = """
+                Golden mismatch.
+                First difference at line \(firstDiff + 1):
+                   EXPECTED: \(e)
+                     ACTUAL: \(a)
+                """
+            } else {
+                explain = "Golden mismatch."
+            }
+            XCTFail(explain)
         }
     }
 
-    /// If Fixtures/regenerate_contract.json contains {"should_generate": true},
-    /// regenerate both expected_minty.txt and contract_spec.json, then set should_generate=false.
     func testRegenerateExpectedAndContractIfRequested() throws {
-        guard let zip = TestSupport.fixtureURLIfExists("LLMinty-nohidden.zip") else {
-            throw XCTSkip("Missing Fixtures/LLMinty-nohidden.zip; cannot regenerate.")
-        }
-        guard var cfg = TestSupport.loadRegenerateConfig(), cfg.should_generate == true else {
+        guard let data = try? Data(contentsOf: regenURL),
+              let spec = try? JSONDecoder().decode(RegenSpec.self, from: data),
+              spec.should_generate
+        else {
             throw XCTSkip("No regenerate_contract.json with {\"should_generate\": true}; skipping regeneration.")
         }
+        guard FileManager.default.fileExists(atPath: zipURL.path) else {
+            throw XCTSkip("No Fixtures/LLMinty-nohidden.zip; cannot regenerate")
+        }
 
+        let actual = try runMintyOnZippedSnapshot(zipURL)
+        try actual.write(to: expectedURL, atomically: true, encoding: .utf8)
+
+        // Flip the flag back off.
+        let turnedOff = RegenSpec(should_generate: false)
+        let out = try JSONEncoder().encode(turnedOff)
+        try out.write(to: regenURL)
+
+        print("Regenerated expected_minty.txt; left contract_spec.json untouched; disabled regenerate flag.")
+    }
+
+    // MARK: - Shared helper used by ChecklistContractTests too
+
+    func runMintyOnZippedSnapshot(_ zip: URL) throws -> String {
+        let tmpRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpRoot, withIntermediateDirectories: true)
+
+        // Unzip
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        proc.arguments = [zip.path, "-d", tmpRoot.path]
+        try proc.run(); proc.waitUntilExit()
+        XCTAssertEqual(proc.terminationStatus, 0, "Failed to unzip test fixture")
+
+        // Pipeline: scan → analyze → score → order → render → post
         let fm = FileManager.default
-        let fixtures = TestSupport.fixturesDir()
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("llminty-regenerate-\(UUID().uuidString)")
-        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: tmp) }
+        let root = tmpRoot
+        let outputName = "minty.txt"
 
-        let root = try TestSupport.unzip(zip, to: tmp)
-        let actualText = TestSupport.normalized(try TestSupport.runLLMinty(in: root))
+        let ignoreText = (try? String(contentsOf: root.appendingPathComponent(".mintyignore"), encoding: .utf8)) ?? ""
+        let matcher = try IgnoreMatcher(
+            builtInPatterns: BuiltInExcludes.defaultPatterns(outputFileName: outputName),
+            userFileText: ignoreText
+        )
+        let scanner = FileScanner(root: root, matcher: matcher)
+        let files = try scanner.scan()
 
-        // 1) Write expected golden
-        let expectedURL = fixtures.appendingPathComponent("expected_minty.txt")
-        try actualText.write(to: expectedURL, atomically: true, encoding: .utf8)
+        let analyzer = SwiftAnalyzer()
+        let analyzed = try analyzer.analyze(files: files)
 
-        // 2) Write contract_spec.json based on our canonical checklist
-        let spec = TestSupport.defaultContract()
-        try TestSupport.saveContractSpec(spec)
+        let scoring = Scoring()
+        let scored = scoring.score(analyzed: analyzed)
 
-        // 3) Flip should_generate -> false
-        cfg.should_generate = false
-        try TestSupport.saveRegenerateConfig(cfg)
+        let ordered = GraphCentrality.orderDependencyAware(scored)
+        let renderer = Renderer()
 
-        // Sanity
-        let roundTrip = try String(contentsOf: expectedURL, encoding: .utf8)
-        XCTAssertFalse(roundTrip.isEmpty, "Regenerated expected_minty.txt is empty?")
+        var parts: [String] = []
+        parts.reserveCapacity(ordered.count * 2)
+        for sf in ordered {
+            let rf = try renderer.render(file: sf, score: sf.score)
+            parts.append("FILE: \(rf.relativePath)")
+            parts.append("")
+            parts.append(rf.content)
+        }
+        let joined = parts.joined(separator: "\n")
+        return postProcessMinty(joined)
     }
 }
