@@ -1,4 +1,67 @@
+# Xcode
+.DS_Store
+*/.DS_Store
+build/
+DerivedData/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+*.xcuserstate
+
+# Swift Package Manager
+.swiftpm/
 .build/
 Packages/
+Package.resolved
 *.xcodeproj
-.DS_Store
+*.xcworkspace
+
+# Swift binaries & logs
+*.swiftdoc
+*.swiftsourceinfo
+*.dSYM
+*.dSYM.zip
+*.dSYM.tar.gz
+*.log
+
+# macOS
+*.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDEs
+*.idea/
+*.vscode/
+*.swiftpm/xcode/package.xcworkspace/
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+fastlane/readme.md
+
+# SPM dependencies (if checked out manually)
+.build/
+.packages/
+
+# Vapor-specific
+Config/secrets/
+*.env
+.env.*
+
+
+# SQLite runtime data
+/data/*.sqlite3
+/data/*.sqlite3-wal
+/data/*.sqlite3-shm
+/data/*.db
+/data/*.db-*
