@@ -14,11 +14,32 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install Swift 6.1
-        uses: slashmo/install-swift@v0.4.0
         with:
-          version: "6.1"
+          fetch-depth: 0
+          persist-credentials: true
+
+      # Install Swiftly (official swift.org helper) and configure a Swift 6.1 toolchain
+      - name: Install Swiftly and Swift 6.1
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Download the Swiftly installer package (official from download.swift.org)
+          SWIFTLY_PKG="swiftly.pkg"
+          curl -fsSL -o "${SWIFTLY_PKG}" "https://download.swift.org/swiftly/darwin/swiftly.pkg"
+
+          # Install Swiftly for the current user (allowed on runners)
+          sudo installer -pkg "${SWIFTLY_PKG}" -target CurrentUserHomeDirectory >/dev/null
+
+          # Initialize Swiftly and ensure environment is set
+          ~/.swiftly/bin/swiftly init --quiet-shell-followup
+
+          # Install & use Swift 6.1 (adjust to a specific patch like 6.1.2 if you prefer)
+          ~/.swiftly/bin/swiftly install --use 6.1
+
+          # Source the environment so `swift` is on PATH for subsequent steps
+          . "${SWIFTLY_HOME_DIR:-$HOME/.swiftly}/env.sh"
+          hash -r
 
       - name: Verify Swift
         run: swift --version
@@ -29,9 +50,28 @@ jobs:
       - name: Generate minty.txt
         run: .build/release/llminty
 
-      - name: Commit updated minty.txt (if changed)
+      # Commit only on direct pushes to main (avoid pushing from PR workflows)
+      - name: Commit & push updated minty.txt if changed
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          file_pattern: minty.txt
-          commit_message: "chore: refresh minty.txt"
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Ensure we have full history to avoid detached-head issues
+          git fetch --no-tags --prune --unshallow || true
+
+          # Stage file (if missing, exit quietly)
+          git add minty.txt || true
+
+          # Only commit & push if there are changes
+          if ! git diff --quiet --exit-code --staged; then
+            git commit -m "chore: refresh minty.txt (CI)"
+            # Push back to main using the token provided by actions/checkout
+            git push origin HEAD:main
+          else
+            echo "No changes to minty.txt"
+          fi
