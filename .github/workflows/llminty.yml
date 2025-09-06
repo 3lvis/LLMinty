@@ -1,0 +1,31 @@
+name: Refresh minty.txt
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  contents: write  # needed to push changes
+
+jobs:
+  llminty:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Print Swift toolchain
+        run: swift --version
+
+      - name: Build LLMinty
+        run: swift build -c release
+
+      - name: Generate minty.txt
+        run: .build/release/llminty
+
+      - name: Commit updated minty.txt (if changed)
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          file_pattern: minty.txt
+          commit_message: "chore: refresh minty.txt"

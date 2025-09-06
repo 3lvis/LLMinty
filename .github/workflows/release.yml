@@ -1,0 +1,53 @@
+name: Build & publish release asset
+
+on:
+  push:
+    tags:
+      - 'v*'        # publish on tag push, e.g. v0.1.0
+  workflow_dispatch: {}
+
+jobs:
+  build-and-release:
+    name: Build (runner arch) and publish release asset
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Swift (uses system Swift on macOS runner)
+        run: swift --version
+
+      - name: Build release
+        run: |
+          swift build -c release
+          mkdir -p release
+          cp .build/*/release/llminty release/llminty
+          chmod +x release/llminty
+
+      - name: Create tarball
+        env:
+          TAG: ${{ github.ref_name || 'local' }}
+        run: |
+          ARCH=$(uname -m)
+          TAR_NAME="llminty-${TAG}-macos-${ARCH}.tar.gz"
+          tar -czf $TAR_NAME -C release llminty
+          echo "TAR_NAME=$TAR_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload release asset
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: "./${{ steps.create_release.outputs.TAR_NAME || format('llminty-{0}-macos-{1}.tar.gz', github.ref_name, '$(uname -m)') }}"
+          asset_name: ${{ steps.create_release.outputs.TAR_NAME || format('llminty-{0}-macos-{1}.tar.gz', github.ref_name, '$(uname -m)') }}
+          asset_content_type: application/gzip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
