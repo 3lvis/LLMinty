@@ -1,40 +1,72 @@
-# LLMinty
+Nice — I combined your existing README content with the new Homebrew/tap and CI details so it’s ready to paste into your repo. It’s concise, accurate, and includes install + verification + quick troubleshooting.
 
-Single-command CLI to emit a **token‑efficient bundle** of a Swift repository for LLMs.
-
-- **Command:** `llminty` (no args)
-- **Output:** `./minty.txt` at the repo root
-- **Ignore file:** `.mintyignore` (gitignore‑style: globs, `!` negation, root‑anchored `/`, dir `/` suffix, `#` comments)
-- **Deterministic:** Given the same repo + ignore rules, the output is deterministic.
-- **Swift toolchain:** Swift **6.1** compatible (package pins `swift-syntax` **601.0.1**).
+Copy the whole file below into `README.md` (replace the License line with your chosen license if desired).
 
 ---
 
-## Install
+# LLMinty
+
+Single-command CLI that emits a **token-efficient bundle** of a Swift repository for LLMs.
+
+* **Command:** `llminty` (no args)
+* **Output:** `./minty.txt` at the repo root
+* **Ignore file:** `.mintyignore` (gitignore-style: globs, `!` negation, root-anchored `/`, dir `/` suffix, `#` comments)
+* **Deterministic:** Given the same repo + ignore rules, the output is deterministic.
+* **Swift toolchain:** Swift **6.1** compatible (package pins `swift-syntax` **601.0.1**).
+
+---
+
+## Quick install (Homebrew)
+
+We publish prebuilt macOS tarballs as GitHub release assets and provide a small Homebrew tap for easy installation.
+
+One-time tap + install:
+
+```bash
+brew tap 3lvis/llminty
+brew install llminty
+```
+
+One-liner (auto-taps if needed):
+
+```bash
+brew install 3lvis/llminty/llminty
+```
+
+Build-from-source (if you prefer):
 
 ```bash
 git clone git@github.com:3lvis/LLMinty.git
 cd LLMinty
 swift build -c release
-cp .build/release/llminty /usr/local/bin/
+# copy to a bin dir (adjust for Intel/Apple Silicon system)
+cp .build/*/release/llminty /usr/local/bin/   # or /opt/homebrew/bin/
 ```
 
-> macOS runners are recommended (the project targets macOS 13+). Linux may work with a matching Swift toolchain + `swift-syntax` release, but is not guaranteed.
+Verify install:
+
+```bash
+which llminty
+llminty --help
+file "$(which llminty)"   # check architecture (arm64 vs x86_64)
+```
+
+> Note: Homebrew installs use the tarball you upload to GitHub Releases. To publish a new release, create a Git tag (e.g. `v0.1.1`) and push it — the release workflow will build and attach tarballs.
 
 ---
 
 ## Usage
 
-From the **root of the Swift repo you want to condense**:
+Run from the **root of the Swift repo you want to condense**:
 
 ```bash
 llminty
 # → prints: "Created ./minty.txt (N files)"
 ```
 
-This creates a `minty.txt` file with concatenated, minimally rendered source for the most important files first.
+This writes `minty.txt` with concatenated, minimally rendered source for the most important files first.
 
-**Output framing:** for each included file, LLMinty writes a header and a blank line, then the (possibly trimmed) content.
+Output framing example:
 
 ```
 FILE: Sources/MyModule/Foo.swift
@@ -42,48 +74,22 @@ FILE: Sources/MyModule/Foo.swift
 struct Foo { ... }
 ```
 
-Only a **single blank** line is present after each `FILE:` header and the final file ends with a **trailing newline**.
+Each file has a single blank line after the `FILE:` header and the final file ends with a trailing newline.
 
 ---
 
-## What gets included (and how)
+## What gets included (short)
 
-LLMinty walks the repository, categorizes files, **ranks them**, and **renders** them to minimize tokens while preserving structure.
+LLMinty walks the repo, categorizes files, **ranks** them, and **renders** them to minimize tokens while preserving structure.
 
-### Ranking signals (0–1)
+* **Ranking signals:** graph centrality (fan-in / PageRank), public API surface, type influence, complexity proxy, entrypoint indicators.
+* **Rendering:** signatures preserved; low-value bodies elided to `{ ... }`; JSON reduced by head/tail sampling with `// trimmed …` annotations; text/unknown files included with caps; binaries skipped.
+* **Size cap:** per-file cap (2 MB default).
+* **Built-in excludes:** VCS/editor noise, `.build/`, derived Xcode artifacts, dependency folders, large assets, and `minty.txt` itself (self-exclude).
 
-Computed from lightweight AST/graph analysis (`Scoring.swift`, `GraphCentrality.swift`):
+### `.mintyignore`
 
-- **Graph centrality:** Fan‑in and PageRank on the file dependency graph.
-- **Public API surface:** `public`/`open` symbols (protocols weighted higher).
-- **Type influence:** Inbound references to declared types/protocols.
-- **Complexity proxy:** Control‑flow nodes and boolean operations.
-- **Entrypoint indicator:** Presence of `@main`, SwiftUI `App`, or top‑level code.
-
-### Rendering policies
-
-Applied per file based on score (`Rendering.swift` / `SwiftAnalyzer.swift`):
-
-- **Swift files:** Always keep **signatures**, generics and `where` clauses. Bodies are **elided** to `{ ... }` below certain thresholds; high‑value files keep more body detail but still **condense whitespace** for stability.
-- **JSON files:** Structure‑preserving reduction: keep **head 3** and **tail 2** array elements, cap **dict keys** to 6, and annotate with `// trimmed …` markers. Invalid JSON is passed through unchanged.
-- **Text / unknown:** Included as‑is (size‑capped). **Binaries** are skipped.
-- **Size caps:** Each file is capped at **2 MB**; common assets/bundles are excluded by default.
-
-### Built‑in excludes
-
-Common noise is ignored **before** user rules (you can re‑include with `!pattern` in `.mintyignore`). Examples:
-
-- VCS/editors: `.git/`, `.gitignore`, `.gitattributes`, `.DS_Store`, `.idea/`, `.vscode/`, `.svn/`, `.hg/`
-- SwiftPM: `.build/`, `.swiftpm/`
-- Xcode: `DerivedData/`, `*.xcodeproj/`, `*.xcworkspace/`, `xcuserdata/`
-- Apple bundles: `*.app/`, `*.appex/`, `*.framework/`, `*.dSYM/`, `*.xcarchive/`
-- Dep managers: `Pods/`, `Carthage/`
-- Assets/binaries: `*.xcassets/`, common image/font/archive/audio/video, `*.bin`
-- **Self‑exclude:** `minty.txt`
-
-### `.mintyignore` (optional)
-
-Add a `.mintyignore` file at the repo root to fine‑tune inclusion. Syntax mirrors **.gitignore** (order matters; last match wins).
+Use `.mintyignore` at repo root (gitignore syntax) to fine-tune inclusion. Example:
 
 ```gitignore
 # Ignore tests and samples
@@ -91,11 +97,11 @@ Tests/
 Examples/
 **/*.png
 
-# But keep golden snapshot sources
+# Keep golden snapshot sources
 !Tests/**/Fixtures/**/*.swift
 ```
 
-> Note: Use **`.mintyignore`** (not `.llmintyignore`).
+> Use `.mintyignore` (not `.llmintyignore`).
 
 ---
 
@@ -106,95 +112,80 @@ swift build
 swift test
 ```
 
-Key source files:
+Key sources:
 
-- `App.swift` – entrypoint wiring and top‑level flow
-- `FileScanner.swift` – repo walk, file typing, size caps
-- `IgnoreMatcher.swift` – gitignore‑like engine (`*` `?` `**`, `/`, `!`)
-- `SwiftAnalyzer.swift` – lightweight AST passes (SwiftSyntax/SwiftParser)
-- `GraphCentrality.swift` – PageRank + fan‑in
-- `Scoring.swift` – feature normalization & weighted sum
-- `Rendering.swift` – score‑driven trimming and canonicalization
-- `JSONReducer.swift` – structure‑preserving JSON sampling
-- `main.swift` – CLI bootstrap
+* `App.swift`, `main.swift` – CLI wiring
+* `FileScanner.swift`, `IgnoreMatcher.swift` – repo walk & ignore engine
+* `SwiftAnalyzer.swift`, `Rendering.swift`, `Scoring.swift`, `GraphCentrality.swift`, `JSONReducer.swift` – analysis & rendering
+
+---
+
+## CI: auto-refresh `minty.txt`
+
+You already added `.github/workflows/llminty.yml`. This workflow builds LLMinty on `macos-14`, runs it at the repo root, and auto-commits `minty.txt` when it changes.
+
+Workflow summary:
+
+* Trigger: `push` to `main` and `pull_request`
+* Steps: checkout → `swift build -c release` → run `./.build/release/llminty` → commit `minty.txt` (if changed)
+
+Alternative CI behavior:
+
+* Upload `minty.txt` as a PR artifact instead of committing (use `actions/upload-artifact`).
+* Limit commits to `push` on `main` using `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`.
+
+---
+
+## Release automation (build + upload binaries)
+
+Use the `release.yml` workflow to create GitHub Release assets on tag push (e.g. `v0.1.0`). The release job builds LLMinty on the macOS runner and uploads a tarball named like:
+
+```
+llminty-v0.1.0-macos-arm64.tar.gz
+```
+
+If you want both `arm64` and `x86_64` artifacts automatically you can:
+
+* add a self-hosted Intel macOS runner and run a separate job for x86\_64, or
+* build one arch locally and upload the other to the same release (via `gh` or the API).
+
+---
+
+## Homebrew tap notes / troubleshooting
+
+* Tap repo: `github.com/3lvis/homebrew-llminty` (formula `Formula/llminty.rb`). The formula expects a release tarball asset with the binary inside.
+* If `brew audit` or `brew install` shows stale results, the local tapped clone may be out of sync. Refresh with:
+
+```bash
+# re-clone the tap used by Homebrew
+brew untap 3lvis/llminty
+brew tap 3lvis/llminty
+```
+
+* If Homebrew attempts to build from source and SPM uses manifest-time plugins, macOS sandboxing can cause `sandbox_apply: Operation not permitted`. To avoid that, the tap uses prebuilt tarballs so Homebrew installs the binary directly.
 
 ---
 
 ## FAQ
 
-**Does LLMinty modify my repo?**  
+**Does LLMinty modify my repo?**
 Only writes `minty.txt` at the root. Nothing else is changed.
 
-**Can I keep `minty.txt` under version control?**  
-Yes. Many teams commit it so LLMs (and teammates) can diff what changed.
+**Should I commit `minty.txt`?**
+Many teams do — useful for diffing and CI checks. Up to you.
 
-**Does order matter?**  
-Yes—files are sorted to surface the most impactful first (ranked, then by path).
-
-**Will it run on CI?**  
-Absolutely—see the CI recipe below.
-
----
-
-## CI: auto‑refresh `minty.txt` on every change
-
-The recommended approach is a **GitHub Actions** job that builds LLMinty, runs it at the repo root, and commits `minty.txt` back when it changes. Add this workflow at `.github/workflows/llminty.yml`:
-
-```yaml
-name: Refresh minty.txt
-
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-
-permissions:
-  contents: write  # needed to push changes
-
-jobs:
-  llminty:
-    runs-on: macos-14
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Print Swift toolchain
-        run: swift --version
-
-      - name: Build LLMinty
-        run: swift build -c release
-
-      - name: Generate minty.txt
-        run: .build/release/llminty
-
-      - name: Commit updated minty.txt (if changed)
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          file_pattern: minty.txt
-          commit_message: "chore: refresh minty.txt"
-```
-
-### Alternatives
-
-- **Artifacts instead of commits** (for PRs):
-  ```yaml
-  - name: Upload minty.txt
-    uses: actions/upload-artifact@v4
-    with:
-      name: minty
-      path: minty.txt
-  ```
-
-- **Branch‑only updates:** Guard the auto‑commit step to only run on `push` to `main`:
-  ```yaml
-  if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-  ```
-
-- **GitLab CI / Azure Pipelines:** Use a macOS runner and the same three steps: checkout → `swift build -c release` → run `llminty` → persist `minty.txt` (artifact or commit).
+**Will it run on CI?**
+Yes — see the `.github/workflows/llminty.yml` you added.
 
 ---
 
 ## License
 
-Add your chosen license here (e.g., MIT).
+`MIT` (replace with your preferred license)
 
+---
+
+Anything you want reworded or shortened? I can also:
+
+* Add the exact `brew install` badge and link to the tap repo, or
+* Create a short `CONTRIBUTING.md` for submitting changes or PRs to the tap.
