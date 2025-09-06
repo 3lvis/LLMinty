@@ -199,7 +199,7 @@ final class Renderer {
         let rewritten = rw.visit(source)
         var result = rewritten.description
 
-        // Canonicalize empty blocks to "{ ...}" for stable elision markers.
+        // Canonicalize empty blocks to "{ ... }" for stable elision markers.
         if policy != .keepAllBodiesLightlyCondensed {
             let regex = try! NSRegularExpression(pattern: #"\{\s*\}"#, options: [])
             result = regex.stringByReplacingMatches(
