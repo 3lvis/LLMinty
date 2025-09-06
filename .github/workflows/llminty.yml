@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write  # needed to push changes
+  contents: write
 
 jobs:
   llminty:
@@ -14,6 +14,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Swift 6.1 toolchain
+        # installs Swift and updates PATH for subsequent steps
+        uses: fwal/setup-swift@v1
+        with:
+          swift-version: '6.1'   # adjust to exact 6.x you need
 
       - name: Print Swift toolchain
         run: swift --version
