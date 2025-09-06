@@ -15,13 +15,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Swift 6.1 toolchain
-        # installs Swift and updates PATH for subsequent steps
-        uses: fwal/setup-swift@v1
+      - name: Install Swift 6.1
+        uses: slashmo/install-swift@v0.4.0
         with:
-          swift-version: '6.1'   # adjust to exact 6.x you need
+          version: "6.1"
 
-      - name: Print Swift toolchain
+      - name: Verify Swift
         run: swift --version
 
       - name: Build LLMinty
@@ -31,6 +30,7 @@ jobs:
         run: .build/release/llminty
 
       - name: Commit updated minty.txt (if changed)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           file_pattern: minty.txt
