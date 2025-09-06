@@ -1,9 +1,3 @@
-Nice — I combined your existing README content with the new Homebrew/tap and CI details so it’s ready to paste into your repo. It’s concise, accurate, and includes install + verification + quick troubleshooting.
-
-Copy the whole file below into `README.md` (replace the License line with your chosen license if desired).
-
----
-
 # LLMinty
 
 Single-command CLI that emits a **token-efficient bundle** of a Swift repository for LLMs.
@@ -181,11 +175,4 @@ Yes — see the `.github/workflows/llminty.yml` you added.
 
 ## License
 
-`MIT` (replace with your preferred license)
-
----
-
-Anything you want reworded or shortened? I can also:
-
-* Add the exact `brew install` badge and link to the tap repo, or
-* Create a short `CONTRIBUTING.md` for submitting changes or PRs to the tap.
+`MIT`
