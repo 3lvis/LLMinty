@@ -1,0 +1,72 @@
+{
+    "must_have_tokens": {
+        "Sources/llminty/App.swift": [
+            "BuiltInExcludes",
+            "LLMintyApp",
+            "func run(",
+            "postProcessMinty("
+        ],
+        "Sources/llminty/FileScanner.swift": [
+            "func scan()",
+            "seemsBinary(",
+            "relativePath(from",
+            "path(replacingBase"
+        ],
+        "Sources/llminty/GraphCentrality.swift": [
+            "orderDependencyAware("
+        ],
+        "Sources/llminty/IgnoreMatcher.swift": [
+            "parse(line:",
+            "func isIgnored(",
+            "match(pattern",
+            "matchFrom("
+        ],
+        "Sources/llminty/JSONReducer.swift": [
+            "reduceJSONPreservingStructure(",
+            "reduce(",
+            "reduceArray(",
+            "reduceDict(",
+            "stringify(",
+            "escape("
+        ],
+        "Sources/llminty/Rendering.swift": [
+            "SwiftPolicy",
+            "func policyFor(",
+            "func renderSwift(",
+            "lightlyCondenseWhitespace(",
+            "compactText("
+        ],
+        "Sources/llminty/Scoring.swift": [
+            "func score("
+        ],
+        "Sources/llminty/SwiftAnalyzer.swift": [
+            "final class SwiftAnalyzer",
+            "func analyze(",
+            "analyzeSwift(",
+            "ImportDeclSyntax",
+            "StructDeclSyntax",
+            "ClassDeclSyntax",
+            "EnumDeclSyntax",
+            "ProtocolDeclSyntax",
+            "AttributeSyntax",
+            "SourceFileSyntax",
+            "IdentifierTypeSyntax",
+            "MemberTypeSyntax",
+            "TokenSyntax",
+            "inheritanceClauseContains("
+        ]
+    },
+    "must_include_files": [
+        "Sources/llminty/IgnoreMatcher.swift",
+        "Sources/llminty/FileScanner.swift",
+        "Sources/llminty/SwiftAnalyzer.swift",
+        "Sources/llminty/Rendering.swift",
+        "Sources/llminty/GraphCentrality.swift",
+        "Sources/llminty/Scoring.swift",
+        "Sources/llminty/JSONReducer.swift",
+        "Sources/llminty/App.swift",
+        "Sources/llminty/main.swift",
+        "Package.swift"
+    ],
+    "version": 2
+}

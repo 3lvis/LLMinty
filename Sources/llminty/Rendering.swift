@@ -1,3 +1,4 @@
+// Sources/llminty/Rendering.swift
 import Foundation
 import SwiftParser
 import SwiftSyntax
@@ -8,7 +9,6 @@ struct RenderedFile {
 }
 
 final class Renderer {
-
     func render(file: ScoredFile, score: Double) throws -> RenderedFile {
         switch file.analyzed.file.kind {
         case .swift:
@@ -19,8 +19,10 @@ final class Renderer {
             let reduced = JSONReducer.reduceJSONPreservingStructure(text: file.analyzed.text)
             return RenderedFile(relativePath: file.analyzed.file.relativePath, content: reduced)
         case .text, .unknown:
-            let compact = compactText(file.analyzed.text)
-            return RenderedFile(relativePath: file.analyzed.file.relativePath, content: compact)
+            return RenderedFile(
+                relativePath: file.analyzed.file.relativePath,
+                content: compactText(file.analyzed.text)
+            )
         case .binary:
             let size = file.analyzed.file.size
             let type = (file.analyzed.file.relativePath as NSString).pathExtension.lowercased()
@@ -29,14 +31,13 @@ final class Renderer {
         }
     }
 
-    // MARK: - Text compaction
+    // MARK: - Text passes
 
-    /// For .text / .unknown: trim trailing spaces per line, collapse runs of blank lines to a single blank.
-    private func compactText(_ s: String) -> String  {
+    private func compactText(_ s: String) -> String {
         var out: [String] = []
-        out.reserveCapacity(s.count / 24)
+        out.reserveCapacity(max(1, s.count / 24))
         var lastBlank = false
-        for raw in s.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+        for raw in s.split(separator: "\n", omittingEmptySubsequences: false) {
             var line = String(raw)
             while line.last == " " || line.last == "\t" { _ = line.removeLast() }
             let isBlank = line.trimmingCharacters(in: CharacterSet.whitespaces).isEmpty
@@ -51,13 +52,25 @@ final class Renderer {
         return out.joined(separator: "\n")
     }
 
-    /// For Swift bodies: a gentle pass that trims trailing spaces and collapses 3+ blank lines to 2.
-    private func lightlyCondenseWhitespace(_ s: String) -> String  {
-        let trimmedRight = s.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression, range: nil)
-        return trimmedRight.replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression, range: nil)
+    private func lightlyCondenseWhitespace(_ s: String) -> String {
+        var out: [String] = []
+        out.reserveCapacity(max(1, s.count / 24))
+        var blankCount = 0
+        for raw in s.split(separator: "\n", omittingEmptySubsequences: false) {
+            var line = String(raw)
+            while line.last == " " || line.last == "\t" { _ = line.removeLast() }
+            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                blankCount += 1
+                if blankCount <= 2 { out.append("") }
+            } else {
+                blankCount = 0
+                out.append(line)
+            }
+        }
+        return out.joined(separator: "\n")
     }
 
-    // MARK: - Swift policies
+    // MARK: - Policy
 
     enum SwiftPolicy {
         case keepAllBodiesLightlyCondensed            // s ≥ 0.75
@@ -66,126 +79,135 @@ final class Renderer {
         case signaturesOnly                           // s < 0.25
     }
 
-    func policyFor(score: Double) -> SwiftPolicy  {
+    func policyFor(score: Double) -> SwiftPolicy {
         if score >= 0.75 { return .keepAllBodiesLightlyCondensed }
         if score >= 0.50 { return .keepPublicBodiesElideOthers }
         if score >= 0.25 { return .keepOneBodyPerTypeElideRest }
         return .signaturesOnly
     }
 
-    // MARK: - Swift rendering (mechanical, deterministic elision)
+    // MARK: - Swift elision
 
-    /// Mechanically elide Swift function/initializer/subscript bodies according to policy.
-    /// Uses SwiftSyntax rewriting to preserve signatures verbatim.
-    func renderSwift(text: String, policy: SwiftPolicy) throws -> String  {
+    func renderSwift(text: String, policy: SwiftPolicy) throws -> String {
+        let source = Parser.parse(source: text)
+
         if policy == .keepAllBodiesLightlyCondensed {
             return lightlyCondenseWhitespace(text)
         }
 
-        final class Elider: SyntaxRewriter {
-            let policy: Renderer.SwiftPolicy
-            var typeStack: [String] = []
-            var kept: Set<String> = [] // one kept body per fully-qualified type
+        final class Rewriter: SyntaxRewriter {
+            let policy: SwiftPolicy
+            private var typeStack: [String] = []
+            private var keptBodyForType: Set<String> = []
 
-            init(policy: Renderer.SwiftPolicy) {
-                self.policy = policy
-                super.init(viewMode: .sourceAccurate)
+            init(policy: SwiftPolicy) { self.policy = policy }
+
+            private func isPublicOrOpen(_ mods: DeclModifierListSyntax?) -> Bool {
+                guard let mods else { return false }
+                for m in mods {
+                    let k = m.name.text
+                    if k == "public" || k == "open" { return true }
+                }
+                return false
             }
 
-            private func fqType() -> String? {
-                guard !typeStack.isEmpty else { return nil }
-                return typeStack.joined(separator: ".")
-            }
-
-            private func shouldKeepBody(isPublic: Bool) -> Bool {
+            private func shouldElide(isPublic: Bool) -> Bool {
                 switch policy {
-                case .signaturesOnly:
-                    return false
+                case .signaturesOnly: return true
+                case .keepPublicBodiesElideOthers: return !isPublic
                 case .keepOneBodyPerTypeElideRest:
-                    guard let fq = fqType() else { return false }
-                    if kept.contains(fq) { return false }
-                    kept.insert(fq)
-                    return true
-                case .keepPublicBodiesElideOthers:
-                    return isPublic
+                    let current = typeStack.joined(separator: ".")
+                    if keptBodyForType.contains(current) { return true }
+                    keptBodyForType.insert(current)
+                    return false
                 case .keepAllBodiesLightlyCondensed:
-                    return true
+                    return false
                 }
             }
 
-            private func emptyBlock() -> CodeBlockSyntax {
-                CodeBlockSyntax(
-                    leftBrace: .leftBraceToken(leadingTrivia: .space, trailingTrivia: .space),
-                    statements: CodeBlockItemListSyntax([]),
-                    rightBrace: .rightBraceToken(trailingTrivia: .newline)
-                )
-            }
-
-            // Type entries
+            // Types
             override func visit(_ node: StructDeclSyntax) -> DeclSyntax {
                 typeStack.append(node.name.text)
-                let visited = super.visit(node)
+                let rewritten = super.visit(node)
                 _ = typeStack.popLast()
-                return visited
+                return DeclSyntax(rewritten.as(StructDeclSyntax.self) ?? node)
             }
             override func visit(_ node: ClassDeclSyntax) -> DeclSyntax {
                 typeStack.append(node.name.text)
-                let visited = super.visit(node)
+                let rewritten = super.visit(node)
                 _ = typeStack.popLast()
-                return visited
+                return DeclSyntax(rewritten.as(ClassDeclSyntax.self) ?? node)
             }
             override func visit(_ node: EnumDeclSyntax) -> DeclSyntax {
                 typeStack.append(node.name.text)
-                let visited = super.visit(node)
+                let rewritten = super.visit(node)
                 _ = typeStack.popLast()
-                return visited
+                return DeclSyntax(rewritten.as(EnumDeclSyntax.self) ?? node)
             }
             override func visit(_ node: ProtocolDeclSyntax) -> DeclSyntax {
                 typeStack.append(node.name.text)
-                let visited = super.visit(node)
+                let rewritten = super.visit(node)
                 _ = typeStack.popLast()
-                return visited
+                return DeclSyntax(rewritten.as(ProtocolDeclSyntax.self) ?? node)
             }
 
-            // Functions
+            // Bodies
             override func visit(_ node: FunctionDeclSyntax) -> DeclSyntax {
                 guard node.body != nil else { return DeclSyntax(node) }
-                let isPublic = node.modifiers.containsPublicOrOpen
-                if shouldKeepBody(isPublic: isPublic) { return DeclSyntax(node) }
-                let replaced = node.with(\.body, emptyBlock())
-                return DeclSyntax(replaced)
-            }
-
-            // Inits
-            override func visit(_ node: InitializerDeclSyntax) -> DeclSyntax {
-                guard node.body != nil else { return DeclSyntax(node) }
-                let isPublic = node.modifiers.containsPublicOrOpen
-                if shouldKeepBody(isPublic: isPublic) { return DeclSyntax(node) }
-                let replaced = node.with(\.body, emptyBlock())
-                return DeclSyntax(replaced)
-            }
-
-            // Subscripts (replace accessor block with empty accessor list)
-            override func visit(_ node: SubscriptDeclSyntax) -> DeclSyntax {
-                if node.accessorBlock != nil {
-                    let isPublic = node.modifiers.containsPublicOrOpen
-                    if shouldKeepBody(isPublic: isPublic) { return DeclSyntax(node) }
-                    let emptyList = AccessorDeclListSyntax([])
-                    let empty = AccessorBlockSyntax(accessors: .accessors(emptyList))
-                    let replaced = node.with(\.accessorBlock, empty)
+                if shouldElide(isPublic: isPublicOrOpen(node.modifiers)) {
+                    let replaced = node.with(\.body, emptyBlock())
                     return DeclSyntax(replaced)
                 }
                 return DeclSyntax(node)
             }
+
+            override func visit(_ node: InitializerDeclSyntax) -> DeclSyntax {
+                guard node.body != nil else { return DeclSyntax(node) }
+                if shouldElide(isPublic: isPublicOrOpen(node.modifiers)) {
+                    let replaced = node.with(\.body, emptyBlock())
+                    return DeclSyntax(replaced)
+                }
+                return DeclSyntax(node)
+            }
+
+            override func visit(_ node: SubscriptDeclSyntax) -> DeclSyntax {
+                guard let _ = node.accessorBlock else { return DeclSyntax(node) }
+                if shouldElide(isPublic: isPublicOrOpen(node.modifiers)) {
+                    // {}
+                    let empty = AccessorBlockSyntax(
+                        leftBrace: .leftBraceToken(),
+                        accessors: .accessors(AccessorDeclListSyntax([])),
+                        rightBrace: .rightBraceToken()
+                    )
+                    let replaced = node.with(\.accessorBlock, empty)
+                    return DeclSyntax(replaced)
+                }
+                let rewritten = super.visit(node)
+                return DeclSyntax(rewritten.as(SubscriptDeclSyntax.self) ?? node)
+            }
+
+            private func emptyBlock() -> CodeBlockSyntax {
+                CodeBlockSyntax(
+                    leftBrace: .leftBraceToken(),
+                    statements: CodeBlockItemListSyntax([]),
+                    rightBrace: .rightBraceToken()
+                )
+            }
         }
 
-        let tree = Parser.parse(source: text)
-        let rewriter = Elider(policy: policy)
-        let out = rewriter.visit(tree)
-        return lightlyCondenseWhitespace(out.description)
-    }
-}
+        let rw = Rewriter(policy: policy)
+        let rewritten = rw.visit(source)
+        var result = rewritten.description
 
-extension StringProtocol {
-    var isNewline: Bool { self == "\n" || self == "\r\n" }
+        // Canonicalize empty blocks to "{ ... }" for stable elision markers.
+        if policy != .keepAllBodiesLightlyCondensed {
+            let regex = try! NSRegularExpression(pattern: #"\{\s*\}"#, options: [])
+            result = regex.stringByReplacingMatches(
+                in: result,
+                range: NSRange(result.startIndex..., in: result),
+                withTemplate: "{ ... }"
+            )
+        }
+        return lightlyCondenseWhitespace(result)
+    }
 }
