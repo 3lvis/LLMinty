@@ -632,23 +632,6 @@ import XCTest
 final class ScoringTests: XCTestCase {
 func testScoringWeightsAndEntrypointBonus() { ... }
 }
-FILE: Package.resolved
-
-{
-"originHash" : "fafcfb29799827807329c51102552f0f529ef7ef4c8dffc7051b9365efb15aa9",
-"pins" : [
-{
-"identity" : "swift-syntax",
-"kind" : "remoteSourceControl",
-"location" : "https://github.com/swiftlang/swift-syntax.git",
-"state" : {
-"revision" : "f99ae8aa18f0cf0d53481901f88a0991dc3bd4a2",
-"version" : "601.0.1"
-}
-}
-],
-"version" : 3
-}
 FILE: Package.swift
 
 // swift-tools-version: 6.0
@@ -812,7 +795,7 @@ func testScanningKindsAndIgnores() throws { ... }
 }
 FILE: Tests/LLMintyTests/Fixtures/contract_spec.json
 
-{ "version": 2, "must_have_tokens": { "Sources/llminty/JSONReducer.swift": ["reduceJSONPreservingStructure(", "reduce(", "reduceArray(", /* trimmed 1 items */, "stringify(", "escape("], "Sources/llminty/App.swift": ["BuiltInExcludes", "LLMintyApp", "func run(", "postProcessMinty("], "Sources/llminty/IgnoreMatcher.swift": ["parse(line:", "func isIgnored(", "match(pattern", "matchFrom("], "Sources/llminty/Scoring.swift": ["func score("], "Sources/llminty/Rendering.swift": ["SwiftPolicy", "func policyFor(", "func renderSwift(", "lightlyCondenseWhitespace(", "compactText("], "Sources/llminty/GraphCentrality.swift": ["orderDependencyAware("], /* trimmed 2 keys */ }, "must_include_files": ["Sources/llminty/IgnoreMatcher.swift", "Sources/llminty/FileScanner.swift", "Sources/llminty/SwiftAnalyzer.swift", /* trimmed 5 items */, "Sources/llminty/main.swift", "Package.swift"] }
+{ "version": 2, "must_have_tokens": { "Sources/llminty/GraphCentrality.swift": ["orderDependencyAware("], "Sources/llminty/App.swift": ["BuiltInExcludes", "LLMintyApp", "func run(", "postProcessMinty("], "Sources/llminty/Scoring.swift": ["func score("], "Sources/llminty/JSONReducer.swift": ["reduceJSONPreservingStructure(", "reduce(", "reduceArray(", /* trimmed 1 items */, "stringify(", "escape("], "Sources/llminty/IgnoreMatcher.swift": ["parse(line:", "func isIgnored(", "match(pattern", "matchFrom("], "Sources/llminty/FileScanner.swift": ["func scan()", "seemsBinary(", "relativePath(from", "path(replacingBase"], /* trimmed 2 keys */ }, "must_include_files": ["Sources/llminty/IgnoreMatcher.swift", "Sources/llminty/FileScanner.swift", "Sources/llminty/SwiftAnalyzer.swift", /* trimmed 5 items */, "Sources/llminty/main.swift", "Package.swift"] }
 FILE: Tests/LLMintyTests/Fixtures/expected_minty.txt
 
 FILE: Sources/llminty/IgnoreMatcher.swift
