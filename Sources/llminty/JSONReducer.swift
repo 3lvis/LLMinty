@@ -3,7 +3,8 @@ import Foundation
 
 /// Reduces large JSON values while preserving overall structure:
 /// - Long arrays become `head + /* trimmed N items */ + tail`
-/// - Large objects keep the first `maximumDictionaryKeysKept` keys and add `/* trimmed N keys */` at the end
+/// - Large objects keep up to `maximumDictionaryKeysKept` entries and add `/* trimmed N keys */` at the end
+///   (collection-valued entries are preferred to remain visible)
 /// - Scalars are passed through unchanged
 /// If `text` is not valid JSON, it is returned as-is.
 enum JSONReducer {
@@ -45,45 +46,59 @@ enum JSONReducer {
     }
 
     private static func reduceArray(_ array: [Any]) -> Any {
-        // Short arrays: reduce elements recursively, no sentinel.
         if array.count <= headCount + tailCount {
             return array.map { reduce($0) }
         }
 
-        // Long arrays: head + sentinel + tail.
         let trimmedItemCount = array.count - headCount - tailCount
         let headSlice = array.prefix(headCount).map { reduce($0) }
         let tailSlice = array.suffix(tailCount).map { reduce($0) }
-
-        // Unique marker handled in stringify.
         let marker: Any = TrimMarker.items(trimmedItemCount)
 
         return headSlice + [marker] + tailSlice
     }
 
     private static func reduceDictionary(_ dictionary: [String: Any]) -> Any {
-        // Foundation preserves insertion order when decoding from JSON on Apple platforms today.
-        let keysInOrder = Array(dictionary.keys)
+        let totalCount = dictionary.count
 
-        if keysInOrder.count <= maximumDictionaryKeysKept {
+        // Small objects: keep all entries (recursively reduced).
+        if totalCount <= maximumDictionaryKeysKept {
             var kept: [String: Any] = [:]
-            kept.reserveCapacity(keysInOrder.count)
+            kept.reserveCapacity(totalCount)
 
-            for key in keysInOrder {
-                kept[key] = reduce(dictionary[key]!)
+            for (key, value) in dictionary {
+                kept[key] = reduce(value)
             }
             return kept
         }
 
-        // Keep first N keys; stringify will append the trailing comment.
+        // Large objects: prefer keeping collection-valued entries (arrays/objects) first, then scalars.
+        var collectionEntries: [(String, Any)] = []
+        var scalarEntries: [(String, Any)] = []
+
+        for (key, value) in dictionary {
+            if value is [Any] || value is [String: Any] {
+                collectionEntries.append((key, value))
+            } else {
+                scalarEntries.append((key, value))
+            }
+        }
+
+        // Deterministic selection: sort by key within each partition.
+        collectionEntries.sort { $0.0 < $1.0 }
+        scalarEntries.sort { $0.0 < $1.0 }
+
+        let ordered = collectionEntries + scalarEntries
+        let keptPairs = ordered.prefix(maximumDictionaryKeysKept)
+
         var kept: [String: Any] = [:]
         kept.reserveCapacity(maximumDictionaryKeysKept)
 
-        for key in keysInOrder.prefix(maximumDictionaryKeysKept) {
-            kept[key] = reduce(dictionary[key]!)
+        for (key, value) in keptPairs {
+            kept[key] = reduce(value)
         }
 
-        let trimmedKeyCount = keysInOrder.count - maximumDictionaryKeysKept
+        let trimmedKeyCount = max(0, totalCount - kept.count)
         return DictionaryWithTrim(kept: kept, trimmedKeyCount: trimmedKeyCount)
     }
 
@@ -104,7 +119,6 @@ enum JSONReducer {
             return "\"\(escape(string))\""
 
         case let number as NSNumber:
-            // Preserve JSON booleans.
             if CFGetTypeID(number) == CFBooleanGetTypeID() {
                 return number.boolValue ? "true" : "false"
             }
@@ -122,7 +136,6 @@ enum JSONReducer {
         case let marker as TrimMarker:
             switch marker {
             case .items(let count):
-                // JSON-unsafe comment is acceptable for our output contract.
                 return "/* trimmed \(count) items */"
             }
 
@@ -131,13 +144,11 @@ enum JSONReducer {
             return stringifyDictionary(wrapped.kept, trailingTrimComment: comment)
 
         default:
-            // Best-effort fallback via JSONSerialization for unknown-but-JSON-compatible values.
             if JSONSerialization.isValidJSONObject(value),
                let data = try? JSONSerialization.data(withJSONObject: value, options: []),
                let string = String(data: data, encoding: .utf8) {
                 return string
             }
-            // Last resort: quoted debug.
             return "\"\(escape(String(describing: value)))\""
         }
     }
