@@ -194,10 +194,10 @@ override func visit(_ token: TokenSyntax) -> SyntaxVisitorContinueKind  { /* eli
 // MARK: - Small helpers
 // Make this module-internal so Rendering.swift can reuse it
 extension DeclModifierListSyntax {
-var containsPublicOrOpen: Bool { /* empty */ }
+var containsPublicOrOpen: Bool { /* elided-implemented; lines=5; h=ba99552187 */ }
 }
 extension Optional where Wrapped == DeclModifierListSyntax {
-var containsPublicOrOpen: Bool { /* empty */ }
+var containsPublicOrOpen: Bool { /* elided-implemented; lines=1; h=5774f4e9da */ }
 }
 private extension StructDeclSyntax {
 func inheritanceClauseContains(type: String) -> Bool  {
@@ -357,7 +357,7 @@ func policyFor(score: Double) -> SwiftPolicy  { /* elided-implemented; lines=5; 
 func renderSwift(text: String, policy: SwiftPolicy) throws -> String  { /* elided-implemented; lines=106; h=2d0af78461 */ }
 }
 extension StringProtocol {
-var isNewline: Bool { /* elided-implemented; lines=0; h=cbf29ce484 */ }
+var isNewline: Bool { /* elided-implemented; lines=1; h=af65cc5187 */ }
 }
 FILE: Sources/llminty/App.swift
 

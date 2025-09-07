@@ -29,7 +29,7 @@ final class RenderingTests: XCTestCase {
         XCTAssertEqual(renderer.policyFor(score: 0.10), .signaturesOnly)
     }
 
-    /// Emits rich sentinel when bodies are elided.
+    /// Emits rich sentinel when bodies are elided (signaturesOnly baseline).
     func testElidedFuncUsesRichSentinel() throws {
         let source = """
         struct T {
@@ -225,7 +225,7 @@ final class RenderingTests: XCTestCase {
     func testAccessorsUseSentinelWhenElided() throws {
         let source = """
         public struct A {
-            public var value: Int {
+            var value: Int {
                 get { 1 }
                 set { _ = newValue + 1 }
             }
@@ -236,6 +236,37 @@ final class RenderingTests: XCTestCase {
 
         let keepPublic = try Renderer().renderSwift(text: source, policy: .keepPublicBodiesElideOthers)
         XCTAssertTrue(containsMatch(in: keepPublic, pattern: Self.richSentinelPattern))
+
+        let publicSource = """
+public struct A {
+    public var value: Int {
+        get { 1 }
+        set { _ = newValue + 1 }
+    }
+}
+"""
+        let keepPublicPublic = try Renderer().renderSwift(text: publicSource, policy: .keepPublicBodiesElideOthers)
+        XCTAssertFalse(containsMatch(in: keepPublicPublic, pattern: Self.richSentinelPattern),
+                       "Public accessors should not be elided under keepPublic policy.")
+    }
+
+    /// NEW: Implicit getter bodies must produce rich sentinel when elided (regression test).
+    func testImplicitGetterComputedPropertyUsesSentinelWhenElided() throws {
+        let source = """
+        extension DeclModifierListSyntax {
+            var containsPublicOrOpen: Bool {
+                for m in self {
+                    let k = m.name.text
+                    if k == "public" || k == "open" { return true }
+                }
+                return false
+            }
+        }
+        """
+        let result = try Renderer().renderSwift(text: source, policy: .keepPublicBodiesElideOthers)
+        XCTAssertTrue(result.contains("var containsPublicOrOpen: Bool"))
+        XCTAssertTrue(containsMatch(in: result, pattern: Self.richSentinelPattern))
+        XCTAssertFalse(result.contains("{ /* empty */ }"))
     }
 
     /// Empty `{}` canonicalized to `{ /* empty */ }` unless keep-all; also assert rich sentinel appears for non-empty elisions.
@@ -253,19 +284,6 @@ final class RenderingTests: XCTestCase {
         XCTAssertFalse(keepPublic.contains("{}"))
         XCTAssertTrue(keepPublic.contains("{ /* empty */ }")) // truly empty
         XCTAssertTrue(containsMatch(in: keepPublic, pattern: Self.richSentinelPattern)) // non-empty elided
-    }
-
-    /// Explicitly checks that truly empty methods become `{ /* empty */ }` under non-keep-all policies.
-    func testEmptyMethodCanonicalizedUnderKeepPublicToExplicitComment() throws {
-        let source = """
-        struct S {
-            func reallyEmpty() {}
-        }
-        """
-        let keepPublic = try Renderer().renderSwift(text: source, policy: .keepPublicBodiesElideOthers)
-        XCTAssertTrue(keepPublic.contains("func reallyEmpty()"))
-        XCTAssertTrue(keepPublic.contains("{ /* empty */ }"))
-        XCTAssertFalse(containsMatch(in: keepPublic, pattern: Self.richSentinelPattern))
     }
 
     /// Compacts 3+ blank lines to 1 for text and unknown files.
