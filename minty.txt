@@ -483,32 +483,38 @@ FILE: Sources/llminty/JSONReducer.swift
 
 // Sources/llminty/JSONReducer.swift
 import Foundation
+/// Reduces large JSON values while preserving overall structure:
+/// - Long arrays become `head + /* trimmed N items */ + tail`
+/// - Large objects keep the first `maximumDictionaryKeysKept` keys and add `/* trimmed N keys */` at the end
+/// - Scalars are passed through unchanged
+/// If `text` is not valid JSON, it is returned as-is.
 enum JSONReducer {
-// Head/Tail sample sizes & dict key limit
-private static let head = 3
-private static let tail = 2
-private static let dictKeep = 6
-// Public entry point used by Renderer
+// MARK: - Tunables
+private static let headCount = 3
+private static let tailCount = 2
+private static let maximumDictionaryKeysKept = 6
+// MARK: - Public API
 static func reduceJSONPreservingStructure(text: String) -> String { ... }
-// MARK: - Structural reduction
-// Dispatch preserving arrays/objects; leave scalars alone
-private static func reduce(_ v: Any) -> Any { ... }
-private static func reduceArray(_ a: [Any]) -> Any { ... }
-private static func reduceDict(_ d: [String: Any]) -> Any { ... }
-// MARK: - Stringification with "trimmed" notes
-// Internal marker types
+// MARK: - Structural reduction (pure)
+private static func reduce(_ value: Any) -> Any { ... }
+private static func reduceArray(_ array: [Any]) -> Any { ... }
+private static func reduceDictionary(_ dictionary: [String: Any]) -> Any { ... }
+// MARK: - Stringification with "trimmed" notes (pure)
 private enum TrimMarker {
 case items(Int) // arrays
 }
-private struct DictWithTrim {
+private struct DictionaryWithTrim {
 let kept: [String: Any]
-let trimmedCount: Int
+let trimmedKeyCount: Int
 }
-private static func stringify(_ v: Any) -> String { ... }
-private static func stringifyArray(_ a: [Any]) -> String { ... }
-private static func stringifyDict(_ d: [String: Any], trailingTrimComment: String?) -> String { ... }
-// Basic JSON string escaper
-private static func escape(_ s: String) -> String { ... }
+private static func stringify(_ value: Any) -> String { ... }
+private static func stringifyArray(_ array: [Any]) -> String { ... }
+private static func stringifyDictionary(
+_ dictionary: [String: Any],
+trailingTrimComment: String?
+) -> String { ... }
+// MARK: - Escaping (pure)
+private static func escape(_ string: String) -> String { ... }
 }
 FILE: Tests/LLMintyTests/GoldenSnapshotTests.swift
 
@@ -876,7 +882,7 @@ func testScanningKindsAndIgnores() throws { ... }
 }
 FILE: Tests/LLMintyTests/Fixtures/contract_spec.json
 
-{ "must_include_files": ["Sources/llminty/IgnoreMatcher.swift", "Sources/llminty/FileScanner.swift", "Sources/llminty/SwiftAnalyzer.swift", /* trimmed 5 items */, "Sources/llminty/main.swift", "Package.swift"], "must_have_tokens": { "Sources/llminty/Rendering.swift": ["SwiftPolicy", "func policyFor(", "func renderSwift(", "lightlyCondenseWhitespace(", "compactText("], "Sources/llminty/App.swift": ["BuiltInExcludes", "LLMintyApp", "func run(", "postProcessMinty("], "Sources/llminty/GraphCentrality.swift": ["orderDependencyAware("], "Sources/llminty/FileScanner.swift": ["func scan()", "seemsBinary(", "relativePath(from", "path(replacingBase"], "Sources/llminty/JSONReducer.swift": ["reduceJSONPreservingStructure(", "reduce(", "reduceArray(", /* trimmed 1 items */, "stringify(", "escape("], "Sources/llminty/Scoring.swift": ["func score("], /* trimmed 2 keys */ }, "version": 2 }
+{ "version": 2, "must_include_files": ["Sources/llminty/IgnoreMatcher.swift", "Sources/llminty/FileScanner.swift", "Sources/llminty/SwiftAnalyzer.swift", /* trimmed 5 items */, "Sources/llminty/main.swift", "Package.swift"], "must_have_tokens": { "Sources/llminty/Rendering.swift": ["SwiftPolicy", "func policyFor(", "func renderSwift(", "lightlyCondenseWhitespace(", "compactText("], "Sources/llminty/IgnoreMatcher.swift": ["parse(line:", "func isIgnored(", "match(pattern", "matchFrom("], "Sources/llminty/JSONReducer.swift": ["reduceJSONPreservingStructure(", "reduce(", "reduceArray(", /* trimmed 1 items */, "stringify(", "escape("], "Sources/llminty/Scoring.swift": ["func score("], "Sources/llminty/App.swift": ["BuiltInExcludes", "LLMintyApp", "func run(", "postProcessMinty("], "Sources/llminty/GraphCentrality.swift": ["orderDependencyAware("], /* trimmed 2 keys */ } }
 FILE: Tests/LLMintyTests/Fixtures/expected_minty.txt
 
 FILE: Sources/llminty/IgnoreMatcher.swift
