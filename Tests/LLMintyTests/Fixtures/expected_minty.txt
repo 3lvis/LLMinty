@@ -21,14 +21,14 @@ if let pat = Self.parse(line: line) { list.append(pat) }
 self.ordered = list
 }
 // MARK: - Parser
-private static func parse(line: String) -> Pattern? { ... }
+private static func parse(line: String) -> Pattern? { /* elided-implemented; lines=19; h=4e7a37ce40 */ }
 // MARK: - Eval
-func isIgnored(_ relativePath: String, isDirectory: Bool) -> Bool { ... }
-private static func match(pattern p: Pattern, pathSegments: [String]) -> Bool { ... }
+func isIgnored(_ relativePath: String, isDirectory: Bool) -> Bool { /* elided-implemented; lines=26; h=b02b377c1d */ }
+private static func match(pattern p: Pattern, pathSegments: [String]) -> Bool { /* elided-implemented; lines=2; h=94afdfd102 */ }
 // Segment matcher for '*' and '?'
-private static func matchSegment(_ pat: String, _ txt: String) -> Bool { ... }
+private static func matchSegment(_ pat: String, _ txt: String) -> Bool { /* elided-implemented; lines=30; h=ad8154ec0f */ }
 // '**' matches zero or more segments. '*' matches within a segment (no '/').
-private static func matchFrom(patternSegs: [String], pathSegs: [String], startAt: Int) -> Bool { ... }
+private static func matchFrom(patternSegs: [String], pathSegs: [String], startAt: Int) -> Bool { /* elided-implemented; lines=20; h=c66eff7e46 */ }
 }
 FILE: Sources/llminty/FileScanner.swift
 
@@ -88,7 +88,7 @@ results.append(RepoFile(relativePath: relClean, absoluteURL: url, isDirectory: f
 results.sort { $0.relativePath < $1.relativePath }
 return results
 }
-static func seemsBinary(url: URL) -> Bool { ... }
+static func seemsBinary(url: URL) -> Bool { /* elided-implemented; lines=11; h=4efe0be34c */ }
 }
 // MARK: - Path helpers
 private extension String {
@@ -96,10 +96,10 @@ func removingPrefix(_ p: String) -> String {
 guard hasPrefix(p) else { return self }
 return String(dropFirst(p.count))
 }
-func relativePath(from root: String) -> String { ... }
+func relativePath(from root: String) -> String { /* elided-implemented; lines=5; h=e54011b7db */ }
 }
 extension String {
-func path(replacingBase base: String) -> String { ... }
+func path(replacingBase base: String) -> String { /* elided-implemented; lines=3; h=f1007fba7b */ }
 }
 FILE: Sources/llminty/SwiftAnalyzer.swift
 
@@ -154,7 +154,7 @@ analyzed[i].inboundRefCount = inbound[analyzed[i].file.relativePath] ?? 0
 }
 return analyzed
 }
-private func analyzeSwift(path: String, text: String) -> AnalyzedFile { ... }
+private func analyzeSwift(path: String, text: String) -> AnalyzedFile { /* elided-implemented; lines=17; h=8a969177df */ }
 }
 // MARK: - Collector with SwiftSyntax
 private struct CollectorContext {
@@ -173,31 +173,31 @@ init(context: inout CollectorContext)  {
 self.ctx = withUnsafeMutablePointer(to: &context) { $0 }
 super.init(viewMode: .sourceAccurate)
 }
-override func visit(_ node: ImportDeclSyntax) -> SyntaxVisitorContinueKind  { ... }
-override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind  { ... }
-override func visitPost(_ node: StructDeclSyntax)  { ... }
-override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind  { ... }
-override func visitPost(_ node: ClassDeclSyntax)  { ... }
-override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind  { ... }
-override func visitPost(_ node: EnumDeclSyntax)  { ... }
-override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind  { ... }
-override func visitPost(_ node: ProtocolDeclSyntax)  { ... }
-override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind  { ... }
-override func visit(_ node: SourceFileSyntax) -> SyntaxVisitorContinueKind  { ... }
-override func visitPost(_ node: SourceFileSyntax)  { ... }
+override func visit(_ node: ImportDeclSyntax) -> SyntaxVisitorContinueKind  { /* elided-implemented; lines=3; h=f0184bd518 */ }
+override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind  { /* elided-implemented; lines=7; h=a10c260cbd */ }
+override func visitPost(_ node: StructDeclSyntax)  { /* elided-implemented; lines=1; h=4ae29d9258 */ }
+override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind  { /* elided-implemented; lines=6; h=f5ee228832 */ }
+override func visitPost(_ node: ClassDeclSyntax)  { /* elided-implemented; lines=1; h=4ae29d9258 */ }
+override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind  { /* elided-implemented; lines=6; h=f5ee228832 */ }
+override func visitPost(_ node: EnumDeclSyntax)  { /* elided-implemented; lines=1; h=4ae29d9258 */ }
+override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind  { /* elided-implemented; lines=6; h=37a2ce214e */ }
+override func visitPost(_ node: ProtocolDeclSyntax)  { /* elided-implemented; lines=1; h=4ae29d9258 */ }
+override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind  { /* elided-implemented; lines=3; h=1acf794c06 */ }
+override func visit(_ node: SourceFileSyntax) -> SyntaxVisitorContinueKind  { /* elided-implemented; lines=8; h=ab982e0809 */ }
+override func visitPost(_ node: SourceFileSyntax)  { /* empty */ }
 // Types referenced
-override func visit(_ node: IdentifierTypeSyntax) -> SyntaxVisitorContinueKind  { ... }
-override func visit(_ node: MemberTypeSyntax) -> SyntaxVisitorContinueKind  { ... }
+override func visit(_ node: IdentifierTypeSyntax) -> SyntaxVisitorContinueKind  { /* elided-implemented; lines=4; h=24b682256a */ }
+override func visit(_ node: MemberTypeSyntax) -> SyntaxVisitorContinueKind  { /* elided-implemented; lines=4; h=cba4a290e5 */ }
 // Complexity: count control-flow keywords and boolean ops
-override func visit(_ token: TokenSyntax) -> SyntaxVisitorContinueKind  { ... }
+override func visit(_ token: TokenSyntax) -> SyntaxVisitorContinueKind  { /* elided-implemented; lines=11; h=6dcde8b382 */ }
 }
 // MARK: - Small helpers
 // Make this module-internal so Rendering.swift can reuse it
 extension DeclModifierListSyntax {
-var containsPublicOrOpen: Bool { ... }
+var containsPublicOrOpen: Bool { /* empty */ }
 }
 extension Optional where Wrapped == DeclModifierListSyntax {
-var containsPublicOrOpen: Bool { ... }
+var containsPublicOrOpen: Bool { /* empty */ }
 }
 private extension StructDeclSyntax {
 func inheritanceClauseContains(type: String) -> Bool  {
@@ -247,7 +247,7 @@ norm.influenceMax = max(norm.influenceMax, a.outgoingFileDeps.count)
 norm.complexityMax = max(norm.complexityMax, a.complexity)
 }
 // Safe division
-func nzDiv(_ num: Double, by den: Double) -> Double { ... }
+func nzDiv(_ num: Double, by den: Double) -> Double { /* elided-implemented; lines=1; h=e77d0ba337 */ }
 var out: [ScoredFile] = []
 out.reserveCapacity(analyzed.count)
 for a in analyzed {
@@ -325,7 +325,7 @@ return out
 /// Dependency-aware emission order:
 /// If A depends on B, emit B before A. When multiple nodes are available,
 /// prefer higher score, then lexicographic path.
-static func orderDependencyAware(_ scored: [ScoredFile]) -> [ScoredFile]  { ... }
+static func orderDependencyAware(_ scored: [ScoredFile]) -> [ScoredFile]  { /* elided-implemented; lines=58; h=ac9ea5288b */ }
 }
 FILE: Sources/llminty/Rendering.swift
 

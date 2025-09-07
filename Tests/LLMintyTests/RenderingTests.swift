@@ -10,7 +10,10 @@ final class RenderingTests: XCTestCase {
     #"\{\s*/\*\s*elided-implemented;\s*lines=\d+;\s*h=[0-9a-f]{8,12}\s*\*/\s*\}"#
 
     private func containsMatch(in text: String, pattern: String) -> Bool {
-        let regex = try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators])
+        let regex = try! NSRegularExpression(
+            pattern: pattern,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        )
         let range = NSRange(text.startIndex..., in: text)
         return regex.firstMatch(in: text, range: range) != nil
     }
@@ -26,7 +29,7 @@ final class RenderingTests: XCTestCase {
         XCTAssertEqual(renderer.policyFor(score: 0.10), .signaturesOnly)
     }
 
-    /// Emits rich sentinel under `.signaturesOnly`.
+    /// Emits rich sentinel when bodies are elided.
     func testElidedFuncUsesRichSentinel() throws {
         let source = """
         struct T {
@@ -63,7 +66,8 @@ final class RenderingTests: XCTestCase {
         }
 
         guard let h1 = grabHash(first), let h2 = grabHash(second) else {
-            XCTFail("expected short hash in both renders"); return
+            XCTFail("expected short hash in both renders")
+            return
         }
         XCTAssertEqual(h1, h2)
     }
@@ -81,7 +85,7 @@ final class RenderingTests: XCTestCase {
         XCTAssertEqual(renderer.policyFor(score: 0.2999), .signaturesOnly)
     }
 
-    /// Rendering routes to policy by score.
+    /// Rendering routes to policy by score and uses rich sentinels for elided non-public bodies.
     func testRenderRoutingUsesScoreToSelectPolicy() throws {
         let analyzed = AnalyzedFile(
             file: RepoFile(
@@ -108,17 +112,25 @@ final class RenderingTests: XCTestCase {
         )
         let renderer = Renderer()
 
-        let keepAll = try renderer.render(file: ScoredFile(analyzed: analyzed, score: 0.85, fanIn: 0, pageRank: 0), score: 0.85).content
+        let keepAll = try renderer.render(
+            file: ScoredFile(analyzed: analyzed, score: 0.85, fanIn: 0, pageRank: 0),
+            score: 0.85
+        ).content
         XCTAssertTrue(keepAll.contains("PUBLIC_BODY"))
         XCTAssertTrue(keepAll.contains("INTERNAL_BODY"))
 
-        let keepPublic = try renderer.render(file: ScoredFile(analyzed: analyzed, score: 0.65, fanIn: 0, pageRank: 0), score: 0.65).content
+        let keepPublic = try renderer.render(
+            file: ScoredFile(analyzed: analyzed, score: 0.65, fanIn: 0, pageRank: 0),
+            score: 0.65
+        ).content
         XCTAssertTrue(keepPublic.contains("PUBLIC_BODY"))
         XCTAssertFalse(keepPublic.contains("INTERNAL_BODY"))
-        XCTAssertFalse(containsMatch(in: keepPublic, pattern: Self.richSentinelPattern))
-        XCTAssertTrue(keepPublic.contains("{ ... }"))
+        XCTAssertTrue(containsMatch(in: keepPublic, pattern: Self.richSentinelPattern)) // elided has sentinel
 
-        let signaturesOnly = try renderer.render(file: ScoredFile(analyzed: analyzed, score: 0.25, fanIn: 0, pageRank: 0), score: 0.25).content
+        let signaturesOnly = try renderer.render(
+            file: ScoredFile(analyzed: analyzed, score: 0.25, fanIn: 0, pageRank: 0),
+            score: 0.25
+        ).content
         XCTAssertFalse(signaturesOnly.contains("PUBLIC_BODY"))
         XCTAssertFalse(signaturesOnly.contains("INTERNAL_BODY"))
         XCTAssertTrue(containsMatch(in: signaturesOnly, pattern: Self.richSentinelPattern))
@@ -138,7 +150,7 @@ final class RenderingTests: XCTestCase {
         XCTAssertFalse(containsMatch(in: result, pattern: Self.richSentinelPattern))
     }
 
-    /// Under keep-public, `open` kept; `internal`/`package` elided.
+    /// Under keep-public, `open` kept; `internal`/`package` elided with rich sentinel; truly empty becomes `{ /* empty */ }`.
     func testOpenIsKept_InternalAndPackageAreElided() throws {
         let source = """
         open class OC { open func of() { print("O") } }
@@ -156,11 +168,10 @@ final class RenderingTests: XCTestCase {
         XCTAssertTrue(result.contains("package func pkg()"))
         XCTAssertFalse(result.contains("print(\"P\")"))
 
-        XCTAssertFalse(containsMatch(in: result, pattern: Self.richSentinelPattern))
-        XCTAssertTrue(result.contains("{ ... }"))
+        XCTAssertTrue(containsMatch(in: result, pattern: Self.richSentinelPattern))
     }
 
-    /// Keep-one keeps only the first executable per container.
+    /// Keep-one keeps only the first executable per container; elided ones use rich sentinel.
     func testOneBodyPerContainerOnlyFirstExecutableIsKept() throws {
         let source = """
         struct C {
@@ -173,10 +184,10 @@ final class RenderingTests: XCTestCase {
         XCTAssertTrue(result.contains("print(\"FIRST\")"))
         XCTAssertFalse(result.contains("print(\"SECOND\")"))
         XCTAssertFalse(result.contains("print(\"THIRD\")"))
-        XCTAssertTrue(result.contains("{ ... }"))
+        XCTAssertTrue(containsMatch(in: result, pattern: Self.richSentinelPattern))
     }
 
-    /// Computed properties don't take the "one body" slot.
+    /// Computed properties: accessors that are elided use rich sentinel when non-empty; do not claim the keep-one slot.
     func testComputedPropertiesDoNotCountTowardOne() throws {
         let source = """
         struct D {
@@ -188,7 +199,7 @@ final class RenderingTests: XCTestCase {
         let result = try Renderer().renderSwift(text: source, policy: .keepOneBodyPerTypeElideRest)
         XCTAssertTrue(result.contains("print(\"KEPT\")"))
         XCTAssertFalse(result.contains("print(\"ELIDED\")"))
-        XCTAssertTrue(result.contains("{ ... }"))
+        XCTAssertTrue(containsMatch(in: result, pattern: Self.richSentinelPattern))
     }
 
     /// Extensions are separate containers for keep-one.
@@ -210,8 +221,8 @@ final class RenderingTests: XCTestCase {
         XCTAssertFalse(result.contains("print(\"X2\")"))
     }
 
-    /// Accessors use sentinel only under `.signaturesOnly`.
-    func testAccessorsSentinelOnlyUnderSignaturesOnly() throws {
+    /// Accessors use rich sentinel whenever elided and non-empty (not only under `.signaturesOnly`).
+    func testAccessorsUseSentinelWhenElided() throws {
         let source = """
         public struct A {
             public var value: Int {
@@ -224,10 +235,10 @@ final class RenderingTests: XCTestCase {
         XCTAssertTrue(containsMatch(in: signaturesOnly, pattern: Self.richSentinelPattern))
 
         let keepPublic = try Renderer().renderSwift(text: source, policy: .keepPublicBodiesElideOthers)
-        XCTAssertFalse(containsMatch(in: keepPublic, pattern: Self.richSentinelPattern))
+        XCTAssertTrue(containsMatch(in: keepPublic, pattern: Self.richSentinelPattern))
     }
 
-    /// Empty `{}` canonicalized to `{ ... }` unless keep-all.
+    /// Empty `{}` canonicalized to `{ /* empty */ }` unless keep-all; also assert rich sentinel appears for non-empty elisions.
     func testCanonicalizeEmptyBlocksOnlyWhenPolicyIsNotKeepAll() throws {
         let source = """
         struct Z {
@@ -240,7 +251,21 @@ final class RenderingTests: XCTestCase {
 
         let keepPublic = try Renderer().renderSwift(text: source, policy: .keepPublicBodiesElideOthers)
         XCTAssertFalse(keepPublic.contains("{}"))
-        XCTAssertTrue(keepPublic.contains("{ ... }"))
+        XCTAssertTrue(keepPublic.contains("{ /* empty */ }")) // truly empty
+        XCTAssertTrue(containsMatch(in: keepPublic, pattern: Self.richSentinelPattern)) // non-empty elided
+    }
+
+    /// Explicitly checks that truly empty methods become `{ /* empty */ }` under non-keep-all policies.
+    func testEmptyMethodCanonicalizedUnderKeepPublicToExplicitComment() throws {
+        let source = """
+        struct S {
+            func reallyEmpty() {}
+        }
+        """
+        let keepPublic = try Renderer().renderSwift(text: source, policy: .keepPublicBodiesElideOthers)
+        XCTAssertTrue(keepPublic.contains("func reallyEmpty()"))
+        XCTAssertTrue(keepPublic.contains("{ /* empty */ }"))
+        XCTAssertFalse(containsMatch(in: keepPublic, pattern: Self.richSentinelPattern))
     }
 
     /// Compacts 3+ blank lines to 1 for text and unknown files.
@@ -280,11 +305,17 @@ final class RenderingTests: XCTestCase {
             inboundRefCount: 0
         )
 
-        let textResult = try Renderer().render(file: ScoredFile(analyzed: textFile, score: 0.1, fanIn: 0, pageRank: 0.0), score: 0.1).content
+        let textResult = try Renderer().render(
+            file: ScoredFile(analyzed: textFile, score: 0.1, fanIn: 0, pageRank: 0.0),
+            score: 0.1
+        ).content
         XCTAssertFalse(textResult.contains("\n\n\n"))
         XCTAssertTrue(textResult.contains("\n\n"))
 
-        let unknownResult = try Renderer().render(file: ScoredFile(analyzed: unknownFile, score: 0.2, fanIn: 0, pageRank: 0.0), score: 0.2).content
+        let unknownResult = try Renderer().render(
+            file: ScoredFile(analyzed: unknownFile, score: 0.2, fanIn: 0, pageRank: 0.0),
+            score: 0.2
+        ).content
         XCTAssertFalse(unknownResult.contains("\n\n\n"))
         XCTAssertTrue(unknownResult.contains("\n\n"))
     }
