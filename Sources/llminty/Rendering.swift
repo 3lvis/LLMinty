@@ -27,10 +27,10 @@ final class Renderer {
     /// Map a 0–1 score to a rendering policy.
     func policyFor(score: Double) -> RenderPolicy {
         switch score {
-        case let s where s >= 0.80: return .keepAllBodiesLightlyCondensed
-        case let s where s >= 0.60: return .keepPublicBodiesElideOthers
-        case let s where s >= 0.30: return .keepOneBodyPerTypeElideRest
-        default:                    return .signaturesOnly
+        case let scoreValue where scoreValue >= 0.80: return .keepAllBodiesLightlyCondensed
+        case let scoreValue where scoreValue >= 0.60: return .keepPublicBodiesElideOthers
+        case let scoreValue where scoreValue >= 0.30: return .keepOneBodyPerTypeElideRest
+        default:                                      return .signaturesOnly
         }
     }
 
@@ -93,26 +93,27 @@ final class Renderer {
     }
 
     /// Normalize line endings, trim trailing spaces/tabs, collapse 3+ blank lines to 1.
-    static func lightlyCondenseWhitespace(_ s: String) -> String {
-        let normalized = s.replacingOccurrences(of: "\r\n", with: "\n")
+    static func lightlyCondenseWhitespace(_ text: String) -> String {
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
         let rawLines = normalized.split(separator: "\n", omittingEmptySubsequences: false)
 
-        var out: [String] = []
-        out.reserveCapacity(rawLines.count)
+        var outputLines: [String] = []
+        outputLines.reserveCapacity(rawLines.count)
 
-        var prevBlank = false
-        for raw in rawLines {
-            var line = String(raw)
-            while let last = line.last, last == " " || last == "\t" { line.removeLast() }
+        var previousWasBlank = false
+        for rawLine in rawLines {
+            var line = String(rawLine)
+            while let lastCharacter = line.last, lastCharacter == " " || lastCharacter == "\t" { line.removeLast() }
 
             let isBlank = line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             if isBlank {
-                if !prevBlank { out.append(""); prevBlank = true }
+                if !previousWasBlank { outputLines.append(""); previousWasBlank = true }
             } else {
-                out.append(line); prevBlank = false
+                outputLines.append(line)
+                previousWasBlank = false
             }
         }
-        return out.joined(separator: "\n")
+        return outputLines.joined(separator: "\n")
     }
 }
 
@@ -138,18 +139,18 @@ fileprivate final class ElideBodiesRewriter: SyntaxRewriter {
     }
 
     /// FNV-1a 64-bit; return first 10 hex chars.
-    private func shortHash(_ s: String) -> String {
-        var h: UInt64 = 0xcbf29ce484222325
-        for b in s.utf8 { h ^= UInt64(b); h &*= 0x100000001b3 }
-        return String(h, radix: 16).prefix(10).lowercased()
+    private func shortHash(_ text: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in text.utf8 { hash ^= UInt64(byte); hash &*= 0x100000001b3 }
+        return String(hash, radix: 16).prefix(10).lowercased()
     }
 
     private func sentinelBlock(from body: CodeBlockSyntax) -> CodeBlockSyntax {
         let text = body.statements.description.replacingOccurrences(of: "\r\n", with: "\n")
         let lineCount = text.isEmpty ? 0 : text.split(separator: "\n", omittingEmptySubsequences: false).count
         let comment = sentinelComment(lines: lineCount, hash: shortHash(text))
-        let lb = TokenSyntax.leftBraceToken(trailingTrivia: .spaces(1) + .blockComment(comment) + .spaces(1))
-        return CodeBlockSyntax(leftBrace: lb, statements: CodeBlockItemListSyntax([]), rightBrace: .rightBraceToken())
+        let leftBrace = TokenSyntax.leftBraceToken(trailingTrivia: .spaces(1) + .blockComment(comment) + .spaces(1))
+        return CodeBlockSyntax(leftBrace: leftBrace, statements: CodeBlockItemListSyntax([]), rightBrace: .rightBraceToken())
     }
 
     private func emptyBlock() -> CodeBlockSyntax {
@@ -157,29 +158,29 @@ fileprivate final class ElideBodiesRewriter: SyntaxRewriter {
     }
 
     private func replacedAccessorBlock(sentinelText: String?) -> AccessorBlockSyntax {
-        let left = sentinelText == nil
+        let leftBrace = sentinelText == nil
         ? TokenSyntax.leftBraceToken()
         : TokenSyntax.leftBraceToken(trailingTrivia: .spaces(1) + .blockComment(sentinelText!) + .spaces(1))
 
         return AccessorBlockSyntax(
-            leftBrace: left,
+            leftBrace: leftBrace,
             accessors: .accessors(AccessorDeclListSyntax([])),
             rightBrace: .rightBraceToken()
         )
     }
 
-    private func accessorSentinel(from ab: AccessorBlockSyntax) -> String {
-        let stats = ab.statementsTextForHash()
-        let lines = stats.isEmpty ? 0 : stats.split(separator: "\n").count
-        return sentinelComment(lines: lines, hash: shortHash(stats))
+    private func accessorSentinel(from accessorBlock: AccessorBlockSyntax) -> String {
+        let statsText = accessorBlock.statementsTextForHash()
+        let lines = statsText.isEmpty ? 0 : statsText.split(separator: "\n").count
+        return sentinelComment(lines: lines, hash: shortHash(statsText))
     }
 
     private func containerKey() -> String { typeStack.last ?? "<toplevel>" }
 
-    private func isPublicOrOpen(_ mods: DeclModifierListSyntax?) -> Bool {
-        guard let mods else { return false }
-        for m in mods {
-            switch m.name.tokenKind {
+    private func isPublicOrOpen(_ modifiers: DeclModifierListSyntax?) -> Bool {
+        guard let modifiers else { return false }
+        for modifier in modifiers {
+            switch modifier.name.tokenKind {
             case .keyword(.public), .keyword(.open): return true
             default: continue
             }
@@ -198,9 +199,9 @@ fileprivate final class ElideBodiesRewriter: SyntaxRewriter {
 
     private func shouldKeepOneHere(kindCountsAsExecutable: Bool) -> Bool {
         guard policy == .keepOneBodyPerTypeElideRest else { return true }
-        let key = containerKey()
-        if keptOneByContainer.contains(key) { return false }
-        if kindCountsAsExecutable { keptOneByContainer.insert(key) }
+        let container = containerKey()
+        if keptOneByContainer.contains(container) { return false }
+        if kindCountsAsExecutable { keptOneByContainer.insert(container) }
         return kindCountsAsExecutable
     }
 
@@ -232,7 +233,7 @@ fileprivate final class ElideBodiesRewriter: SyntaxRewriter {
 
     override func visit(_ node: FunctionDeclSyntax) -> DeclSyntax {
         guard let body = node.body else { return DeclSyntax(super.visit(node)) }
-        let isPub = isPublicOrOpen(node.modifiers)
+        let isPublic = isPublicOrOpen(node.modifiers)
 
         switch policy {
         case .keepOneBodyPerTypeElideRest:
@@ -244,7 +245,7 @@ fileprivate final class ElideBodiesRewriter: SyntaxRewriter {
         case .signaturesOnly:
             return DeclSyntax(node.with(\.body, sentinelBlock(from: body)))
         default:
-            if shouldElideNonPublic(isPub) { return DeclSyntax(node.with(\.body, emptyBlock())) }
+            if shouldElideNonPublic(isPublic) { return DeclSyntax(node.with(\.body, emptyBlock())) }
             return DeclSyntax(super.visit(node))
         }
     }
@@ -290,7 +291,7 @@ fileprivate final class ElideBodiesRewriter: SyntaxRewriter {
     // MARK: - Subscripts (accessor blocks)
 
     override func visit(_ node: SubscriptDeclSyntax) -> DeclSyntax {
-        guard let ab = node.accessorBlock else { return DeclSyntax(super.visit(node)) }
+        guard let accessorBlock = node.accessorBlock else { return DeclSyntax(super.visit(node)) }
 
         switch policy {
         case .keepOneBodyPerTypeElideRest:
@@ -298,7 +299,7 @@ fileprivate final class ElideBodiesRewriter: SyntaxRewriter {
             return DeclSyntax(node.with(\.accessorBlock, replacedAccessorBlock(sentinelText: nil)))
 
         case .signaturesOnly:
-            let comment = accessorSentinel(from: ab)
+            let comment = accessorSentinel(from: accessorBlock)
             return DeclSyntax(node.with(\.accessorBlock, replacedAccessorBlock(sentinelText: comment)))
 
         default:
@@ -315,12 +316,12 @@ fileprivate final class ElideBodiesRewriter: SyntaxRewriter {
         // keep-one: computed properties are always elided and don't claim the slot
         if policy == .keepOneBodyPerTypeElideRest {
             var newBindings = PatternBindingListSyntax([])
-            for b in node.bindings {
-                if b.accessorBlock != nil {
-                    let ab = replacedAccessorBlock(sentinelText: nil)
-                    newBindings.append(b.with(\.accessorBlock, ab))
+            for binding in node.bindings {
+                if binding.accessorBlock != nil {
+                    let accessorBlock = replacedAccessorBlock(sentinelText: nil)
+                    newBindings.append(binding.with(\.accessorBlock, accessorBlock))
                 } else {
-                    newBindings.append(b)
+                    newBindings.append(binding)
                 }
             }
             return DeclSyntax(node.with(\.bindings, newBindings))
@@ -329,16 +330,16 @@ fileprivate final class ElideBodiesRewriter: SyntaxRewriter {
         // other policies: follow public/non-public or sentinel rules
         if shouldElideNonPublic(isPublicOrOpen(node.modifiers)) {
             var newBindings = PatternBindingListSyntax([])
-            for b in node.bindings {
-                if let ab = b.accessorBlock {
+            for binding in node.bindings {
+                if let accessorBlock = binding.accessorBlock {
                     if policy == .signaturesOnly {
-                        let comment = accessorSentinel(from: ab)
-                        newBindings.append(b.with(\.accessorBlock, replacedAccessorBlock(sentinelText: comment)))
+                        let comment = accessorSentinel(from: accessorBlock)
+                        newBindings.append(binding.with(\.accessorBlock, replacedAccessorBlock(sentinelText: comment)))
                     } else {
-                        newBindings.append(b.with(\.accessorBlock, replacedAccessorBlock(sentinelText: nil)))
+                        newBindings.append(binding.with(\.accessorBlock, replacedAccessorBlock(sentinelText: nil)))
                     }
                 } else {
-                    newBindings.append(b)
+                    newBindings.append(binding)
                 }
             }
             return DeclSyntax(node.with(\.bindings, newBindings))
@@ -354,9 +355,9 @@ fileprivate extension AccessorBlockSyntax {
     /// Collect textual bodies of accessors to hash/line-count deterministically.
     func statementsTextForHash() -> String {
         switch accessors {
-        case .accessors(let list):
-            return list
-                .compactMap { $0.body?.statements.description ?? "" }
+        case .accessors(let accessorList):
+            return accessorList
+                .compactMap { accessor in accessor.body?.statements.description ?? "" }
                 .joined(separator: "\n")
                 .replacingOccurrences(of: "\r\n", with: "\n")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
