@@ -472,20 +472,14 @@ try LLMintyApp().run()
 fputs("llminty: \(error.localizedDescription)\n", stderr)
 exit(1)
 }
-FILE: Tests/LLMintyTests/SwiftAnalyzerTests.swift
-
-import XCTest
-@testable import llminty
-final class SwiftAnalyzerTests: XCTestCase {
-func testEntrypointPublicAPIAndRefs() throws { ... }
-}
 FILE: Sources/llminty/JSONReducer.swift
 
 // Sources/llminty/JSONReducer.swift
 import Foundation
 /// Reduces large JSON values while preserving overall structure:
 /// - Long arrays become `head + /* trimmed N items */ + tail`
-/// - Large objects keep the first `maximumDictionaryKeysKept` keys and add `/* trimmed N keys */` at the end
+/// - Large objects keep up to `maximumDictionaryKeysKept` entries and add `/* trimmed N keys */` at the end
+///   (collection-valued entries are preferred to remain visible)
 /// - Scalars are passed through unchanged
 /// If `text` is not valid JSON, it is returned as-is.
 enum JSONReducer {
@@ -515,6 +509,13 @@ trailingTrimComment: String?
 ) -> String { ... }
 // MARK: - Escaping (pure)
 private static func escape(_ string: String) -> String { ... }
+}
+FILE: Tests/LLMintyTests/SwiftAnalyzerTests.swift
+
+import XCTest
+@testable import llminty
+final class SwiftAnalyzerTests: XCTestCase {
+func testEntrypointPublicAPIAndRefs() throws { ... }
 }
 FILE: Tests/LLMintyTests/GoldenSnapshotTests.swift
 
@@ -882,7 +883,7 @@ func testScanningKindsAndIgnores() throws { ... }
 }
 FILE: Tests/LLMintyTests/Fixtures/contract_spec.json
 
-{ "version": 2, "must_include_files": ["Sources/llminty/IgnoreMatcher.swift", "Sources/llminty/FileScanner.swift", "Sources/llminty/SwiftAnalyzer.swift", /* trimmed 5 items */, "Sources/llminty/main.swift", "Package.swift"], "must_have_tokens": { "Sources/llminty/Rendering.swift": ["SwiftPolicy", "func policyFor(", "func renderSwift(", "lightlyCondenseWhitespace(", "compactText("], "Sources/llminty/IgnoreMatcher.swift": ["parse(line:", "func isIgnored(", "match(pattern", "matchFrom("], "Sources/llminty/JSONReducer.swift": ["reduceJSONPreservingStructure(", "reduce(", "reduceArray(", /* trimmed 1 items */, "stringify(", "escape("], "Sources/llminty/Scoring.swift": ["func score("], "Sources/llminty/App.swift": ["BuiltInExcludes", "LLMintyApp", "func run(", "postProcessMinty("], "Sources/llminty/GraphCentrality.swift": ["orderDependencyAware("], /* trimmed 2 keys */ } }
+{ "must_have_tokens": { "Sources/llminty/App.swift": ["BuiltInExcludes", "LLMintyApp", "func run(", "postProcessMinty("], "Sources/llminty/GraphCentrality.swift": ["orderDependencyAware("], "Sources/llminty/Scoring.swift": ["func score("], "Sources/llminty/IgnoreMatcher.swift": ["parse(line:", "func isIgnored(", "match(pattern", "matchFrom("], "Sources/llminty/Rendering.swift": ["SwiftPolicy", "func policyFor(", "func renderSwift(", "lightlyCondenseWhitespace(", "compactText("], "Sources/llminty/SwiftAnalyzer.swift": ["final class SwiftAnalyzer", "func analyze(", "analyzeSwift(", /* trimmed 9 items */, "TokenSyntax", "inheritanceClauseContains("], /* trimmed 2 keys */ }, "version": 2, "must_include_files": ["Sources/llminty/IgnoreMatcher.swift", "Sources/llminty/FileScanner.swift", "Sources/llminty/SwiftAnalyzer.swift", /* trimmed 5 items */, "Sources/llminty/main.swift", "Package.swift"] }
 FILE: Tests/LLMintyTests/Fixtures/expected_minty.txt
 
 FILE: Sources/llminty/IgnoreMatcher.swift
