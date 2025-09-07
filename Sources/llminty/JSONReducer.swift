@@ -1,165 +1,194 @@
 // Sources/llminty/JSONReducer.swift
 import Foundation
 
+/// Reduces large JSON values while preserving overall structure:
+/// - Long arrays become `head + /* trimmed N items */ + tail`
+/// - Large objects keep the first `maximumDictionaryKeysKept` keys and add `/* trimmed N keys */` at the end
+/// - Scalars are passed through unchanged
+/// If `text` is not valid JSON, it is returned as-is.
 enum JSONReducer {
 
-    // Head/Tail sample sizes & dict key limit
-    private static let head = 3
-    private static let tail = 2
-    private static let dictKeep = 6
+    // MARK: - Tunables
 
-    // Public entry point used by Renderer
+    private static let headCount = 3
+    private static let tailCount = 2
+    private static let maximumDictionaryKeysKept = 6
+
+    // MARK: - Public API
+
     static func reduceJSONPreservingStructure(text: String) -> String {
-        guard let data = text.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+        guard
+            let data = text.data(using: .utf8),
+            let value = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
         else {
-            // Pass-through on invalid JSON (also tested)
+            // Pass-through on invalid JSON
             return text
         }
-        let reduced = reduce(obj)
+
+        let reduced = reduce(value)
         return stringify(reduced)
     }
 
-    // MARK: - Structural reduction
+    // MARK: - Structural reduction (pure)
 
-    // Dispatch preserving arrays/objects; leave scalars alone
-    private static func reduce(_ v: Any) -> Any {
-        switch v {
-        case let a as [Any]:
-            return reduceArray(a)
-        case let d as [String: Any]:
-            return reduceDict(d)
+    private static func reduce(_ value: Any) -> Any {
+        switch value {
+        case let array as [Any]:
+            return reduceArray(array)
+
+        case let dictionary as [String: Any]:
+            return reduceDictionary(dictionary)
+
         default:
-            return v
+            return value
         }
     }
 
-    private static func reduceArray(_ a: [Any]) -> Any {
-        // If short, just reduce elements recursively
-        if a.count <= head + tail {
-            return a.map { reduce($0) }
+    private static func reduceArray(_ array: [Any]) -> Any {
+        // Short arrays: reduce elements recursively, no sentinel.
+        if array.count <= headCount + tailCount {
+            return array.map { reduce($0) }
         }
 
-        // Long array: head + sentinel + tail
-        let k = a.count - head - tail
-        let headSlice = a.prefix(head).map { reduce($0) }
-        let tailSlice = a.suffix(tail).map { reduce($0) }
-        // Use a unique marker type we handle in stringify
-        let marker: Any = TrimMarker.items(k)
+        // Long arrays: head + sentinel + tail.
+        let trimmedItemCount = array.count - headCount - tailCount
+        let headSlice = array.prefix(headCount).map { reduce($0) }
+        let tailSlice = array.suffix(tailCount).map { reduce($0) }
+
+        // Unique marker handled in stringify.
+        let marker: Any = TrimMarker.items(trimmedItemCount)
 
         return headSlice + [marker] + tailSlice
     }
 
-    private static func reduceDict(_ d: [String: Any]) -> Any {
-        // JSONSerialization dictionaries aren’t ordered, but in practice Foundation
-        // preserves insertion order for decoding from JSON on Apple platforms today.
-        // We still treat it defensively: iterate keys() as given.
-        let keys = Array(d.keys)
-        if keys.count <= dictKeep {
-            var out: [String: Any] = [:]
-            out.reserveCapacity(keys.count)
-            for k in keys {
-                out[k] = reduce(d[k]!)
+    private static func reduceDictionary(_ dictionary: [String: Any]) -> Any {
+        // Foundation preserves insertion order when decoding from JSON on Apple platforms today.
+        let keysInOrder = Array(dictionary.keys)
+
+        if keysInOrder.count <= maximumDictionaryKeysKept {
+            var kept: [String: Any] = [:]
+            kept.reserveCapacity(keysInOrder.count)
+
+            for key in keysInOrder {
+                kept[key] = reduce(dictionary[key]!)
             }
-            return out
+            return kept
         }
 
-        // Keep first dictKeep keys; attach a trailing "trimmed" comment at stringify time
+        // Keep first N keys; stringify will append the trailing comment.
         var kept: [String: Any] = [:]
-        kept.reserveCapacity(dictKeep)
-        for k in keys.prefix(dictKeep) {
-            kept[k] = reduce(d[k]!)
+        kept.reserveCapacity(maximumDictionaryKeysKept)
+
+        for key in keysInOrder.prefix(maximumDictionaryKeysKept) {
+            kept[key] = reduce(dictionary[key]!)
         }
-        // Wrap with a marker so stringify knows to append the comment
-        return DictWithTrim(kept: kept, trimmedCount: keys.count - dictKeep)
+
+        let trimmedKeyCount = keysInOrder.count - maximumDictionaryKeysKept
+        return DictionaryWithTrim(kept: kept, trimmedKeyCount: trimmedKeyCount)
     }
 
-    // MARK: - Stringification with "trimmed" notes
+    // MARK: - Stringification with "trimmed" notes (pure)
 
-    // Internal marker types
     private enum TrimMarker {
         case items(Int) // arrays
     }
-    private struct DictWithTrim {
+
+    private struct DictionaryWithTrim {
         let kept: [String: Any]
-        let trimmedCount: Int
+        let trimmedKeyCount: Int
     }
 
-    private static func stringify(_ v: Any) -> String {
-        switch v {
-        case let s as String:
-            return "\"\(escape(s))\""
-        case let n as NSNumber:
-            // NSNumber can be bool or number; preserve JSON bool spelling
-            if CFGetTypeID(n) == CFBooleanGetTypeID() {
-                return n.boolValue ? "true" : "false"
+    private static func stringify(_ value: Any) -> String {
+        switch value {
+        case let string as String:
+            return "\"\(escape(string))\""
+
+        case let number as NSNumber:
+            // Preserve JSON booleans.
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                return number.boolValue ? "true" : "false"
             }
-            return n.description
+            return number.description
+
         case _ as NSNull:
             return "null"
-        case let a as [Any]:
-            return stringifyArray(a)
-        case let d as [String: Any]:
-            return stringifyDict(d, trailingTrimComment: nil)
+
+        case let array as [Any]:
+            return stringifyArray(array)
+
+        case let dictionary as [String: Any]:
+            return stringifyDictionary(dictionary, trailingTrimComment: nil)
+
         case let marker as TrimMarker:
             switch marker {
-            case .items(let k):
-                // Middle-of-array sentinel; JSON-unsafe comment is fine for our output
-                return "/* trimmed \(k) items */"
+            case .items(let count):
+                // JSON-unsafe comment is acceptable for our output contract.
+                return "/* trimmed \(count) items */"
             }
-        case let wrapped as DictWithTrim:
-            return stringifyDict(wrapped.kept, trailingTrimComment: "/* trimmed \(wrapped.trimmedCount) keys */")
+
+        case let wrapped as DictionaryWithTrim:
+            let comment = "/* trimmed \(wrapped.trimmedKeyCount) keys */"
+            return stringifyDictionary(wrapped.kept, trailingTrimComment: comment)
+
         default:
-            // Best-effort fallback via JSONSerialization (scalar or unknown)
-            if JSONSerialization.isValidJSONObject(v),
-               let data = try? JSONSerialization.data(withJSONObject: v, options: []),
-               let s = String(data: data, encoding: .utf8) {
-                return s
+            // Best-effort fallback via JSONSerialization for unknown-but-JSON-compatible values.
+            if JSONSerialization.isValidJSONObject(value),
+               let data = try? JSONSerialization.data(withJSONObject: value, options: []),
+               let string = String(data: data, encoding: .utf8) {
+                return string
             }
-            // Last resort: quoted debug
-            return "\"\(escape(String(describing: v)))\""
+            // Last resort: quoted debug.
+            return "\"\(escape(String(describing: value)))\""
         }
     }
 
-    private static func stringifyArray(_ a: [Any]) -> String {
+    private static func stringifyArray(_ array: [Any]) -> String {
         var out = "["
-        for (i, el) in a.enumerated() {
-            if i > 0 { out.append(", ") }
-            out.append(stringify(el))
+        for (index, element) in array.enumerated() {
+            if index > 0 { out.append(", ") }
+            out.append(stringify(element))
         }
         out.append("]")
         return out
     }
 
-    private static func stringifyDict(_ d: [String: Any], trailingTrimComment: String?) -> String {
+    private static func stringifyDictionary(
+        _ dictionary: [String: Any],
+        trailingTrimComment: String?
+    ) -> String {
         var out = "{ "
-        var first = true
-        for (k, v) in d {
-            if !first { out.append(", ") }
-            first = false
-            out.append("\"\(escape(k))\": \(stringify(v))")
+        var isFirst = true
+
+        for (key, value) in dictionary {
+            if !isFirst { out.append(", ") }
+            isFirst = false
+            out.append("\"\(escape(key))\": \(stringify(value))")
         }
-        if let c = trailingTrimComment {
-            if !first { out.append(", ") }
-            out.append(c)
+
+        if let comment = trailingTrimComment {
+            if !isFirst { out.append(", ") }
+            out.append(comment)
         }
+
         out.append(" }")
         return out
     }
 
-    // Basic JSON string escaper
-    private static func escape(_ s: String) -> String {
+    // MARK: - Escaping (pure)
+
+    private static func escape(_ string: String) -> String {
         var out = ""
-        out.reserveCapacity(s.count + 8)
-        for ch in s.unicodeScalars {
-            switch ch {
+        out.reserveCapacity(string.count + 8)
+
+        for scalar in string.unicodeScalars {
+            switch scalar {
             case "\"": out.append("\\\"")
             case "\\": out.append("\\\\")
             case "\n": out.append("\\n")
             case "\r": out.append("\\r")
             case "\t": out.append("\\t")
             default:
-                out.unicodeScalars.append(ch)
+                out.unicodeScalars.append(scalar)
             }
         }
         return out
