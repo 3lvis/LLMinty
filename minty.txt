@@ -118,7 +118,40 @@ var inboundRefCount: Int
 }
 // MARK: - Analyzer
 final class SwiftAnalyzer {
-func analyze(files: [RepoFile]) throws -> [AnalyzedFile] { ... }
+func analyze(files: [RepoFile]) throws -> [AnalyzedFile] {
+// Parse only Swift files
+var analyzed: [AnalyzedFile] = []
+analyzed.reserveCapacity(files.count)
+for f in files where f.kind == .swift {
+let text = (try? String(contentsOf: f.absoluteURL, encoding: .utf8)) ?? ""
+let a = analyzeSwift(path: f.relativePath, text: text)
+analyzed.append(a)
+}
+// Map declared types -> file
+var typeToFile: [String: String] = [:]
+for a in analyzed {
+for t in a.declaredTypes { typeToFile[t, default: a.file.relativePath] = a.file.relativePath }
+}
+// Compute outgoing deps via referenced type → declared type mapping
+for i in analyzed.indices {
+var deps = Set<String>()
+for (name, _) in analyzed[i].referencedTypes {
+if let depPath = typeToFile[name], depPath != analyzed[i].file.relativePath {
+deps.insert(depPath)
+}
+}
+analyzed[i].outgoingFileDeps = Array(deps).sorted()
+}
+// Compute inbound counts
+var inbound: [String: Int] = [:]
+for a in analyzed {
+for dep in a.outgoingFileDeps { inbound[dep, default: 0] += 1 }
+}
+for i in analyzed.indices {
+analyzed[i].inboundRefCount = inbound[analyzed[i].file.relativePath] ?? 0
+}
+return analyzed
+}
 private func analyzeSwift(path: String, text: String) -> AnalyzedFile { ... }
 }
 // MARK: - Collector with SwiftSyntax
@@ -134,7 +167,10 @@ var hasTopLevelCode: Bool = false
 private final class SwiftCollector: SyntaxVisitor {
 private var ctx: UnsafeMutablePointer<CollectorContext>
 private var typeStack: [String] = []
-init(context: inout CollectorContext)  { ... }
+init(context: inout CollectorContext)  {
+self.ctx = withUnsafeMutablePointer(to: &context) { $0 }
+super.init(viewMode: .sourceAccurate)
+}
 override func visit(_ node: ImportDeclSyntax) -> SyntaxVisitorContinueKind  { ... }
 override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind  { ... }
 override func visitPost(_ node: StructDeclSyntax)  { ... }
@@ -168,7 +204,14 @@ extension Optional where Wrapped == DeclModifierListSyntax {
 var containsPublicOrOpen: Bool { self?.containsPublicOrOpen ?? false }
 }
 private extension StructDeclSyntax {
-func inheritanceClauseContains(type: String) -> Bool  { ... }
+func inheritanceClauseContains(type: String) -> Bool  {
+if let clause = self.inheritanceClause {
+for it in clause.inheritedTypes {
+if it.type.trimmedDescription == type { return true }
+}
+}
+return false
+}
 }
 FILE: Sources/llminty/Scoring.swift
 
@@ -238,6 +281,109 @@ pageRank: pr[a.file.relativePath] ?? 0.0
 return out
 }
 }
+FILE: Sources/llminty/Rendering.swift
+
+// Sources/llminty/Rendering.swift
+import Foundation
+import SwiftParser
+import SwiftSyntax
+// MARK: - Output model
+struct RenderedFile {
+let relativePath: String
+let content: String
+init(relativePath: String, content: String) {
+self.relativePath = relativePath
+self.content = content
+}
+}
+// MARK: - Renderer
+final class Renderer {
+enum RenderPolicy: Equatable {
+case keepAllBodiesLightlyCondensed
+case keepPublicBodiesElideOthers
+case keepOneBodyPerTypeElideRest
+case signaturesOnly
+}
+/// Map a 0–1 score to a rendering policy.
+func policyFor(score: Double) -> RenderPolicy {
+switch score {
+case let scoreValue where scoreValue >= 0.80: return .keepAllBodiesLightlyCondensed
+case let scoreValue where scoreValue >= 0.60: return .keepPublicBodiesElideOthers
+case let scoreValue where scoreValue >= 0.30: return .keepOneBodyPerTypeElideRest
+default:                                      return .signaturesOnly
+}
+}
+/// Render a single file based on its kind and score.
+func render(file: ScoredFile, score: Double) throws -> RenderedFile { ... }
+// MARK: - Swift rendering
+/// Produces Swift text according to policy.
+func renderSwift(text: String, policy: RenderPolicy) throws -> String { ... }
+// MARK: - Pure helpers
+private static let emptyBlockRegex = try! NSRegularExpression(
+pattern: #"\{\s*\}"#,
+options: [.caseInsensitive, .dotMatchesLineSeparators]
+)
+/// Replace truly empty `{ ... }` with `{ ... }` (rich sentinels are not empty).
+static func canonicalizeEmptyBlocks(_ text: String) -> String { ... }
+/// Normalize line endings, trim trailing spaces/tabs, collapse 3+ blank lines to 1.
+static func lightlyCondenseWhitespace(_ text: String) -> String { ... }
+}
+// MARK: - SwiftSyntax rewriter
+fileprivate final class ElideBodiesRewriter: SyntaxRewriter {
+private let policy: Renderer.RenderPolicy
+// Track current container (type or <toplevel>) for keep-one policy.
+private var typeStack: [String] = []
+private var keptOneByContainer = Set<String>()
+init(policy: Renderer.RenderPolicy) {
+self.policy = policy
+super.init(viewMode: .sourceAccurate)
+}
+// MARK: - Sentinel + empty blocks
+/// `/* elided-implemented; lines=<N>; h=<short-hex> */`
+private func sentinelComment(lines: Int, hash: String) -> String { ... }
+/// FNV-1a 64-bit; return first 10 hex chars.
+private func shortHash(_ text: String) -> String { ... }
+private func sentinelBlock(from body: CodeBlockSyntax) -> CodeBlockSyntax { ... }
+private func emptyBlock() -> CodeBlockSyntax { ... }
+private func replacedAccessorBlock(sentinelText: String?) -> AccessorBlockSyntax { ... }
+private func accessorSentinel(from accessorBlock: AccessorBlockSyntax) -> String { ... }
+private func containerKey() -> String { ... }
+private func isPublicOrOpen(_ modifiers: DeclModifierListSyntax?) -> Bool { ... }
+private func shouldElideNonPublic(_ isPublic: Bool) -> Bool { ... }
+private func shouldKeepOneHere(kindCountsAsExecutable: Bool) -> Bool { ... }
+// MARK: - Container tracking
+override func visit(_ node: StructDeclSyntax) -> DeclSyntax { ... }
+override func visit(_ node: ClassDeclSyntax) -> DeclSyntax { ... }
+override func visit(_ node: EnumDeclSyntax) -> DeclSyntax { ... }
+override func visit(_ node: ActorDeclSyntax) -> DeclSyntax { ... }
+override func visit(_ node: ExtensionDeclSyntax) -> DeclSyntax { ... }
+// MARK: - Executables
+override func visit(_ node: FunctionDeclSyntax) -> DeclSyntax { ... }
+override func visit(_ node: InitializerDeclSyntax) -> DeclSyntax { ... }
+override func visit(_ node: DeinitializerDeclSyntax) -> DeclSyntax { ... }
+// MARK: - Subscripts (accessor blocks)
+override func visit(_ node: SubscriptDeclSyntax) -> DeclSyntax { ... }
+// MARK: - Computed properties
+override func visit(_ node: VariableDeclSyntax) -> DeclSyntax { ... }
+}
+// MARK: - Accessor hashing helper
+fileprivate extension AccessorBlockSyntax {
+/// Collect textual bodies of accessors to hash/line-count deterministically.
+func statementsTextForHash() -> String {
+switch accessors {
+case .accessors(let accessorList):
+return accessorList
+.compactMap { accessor in accessor.body?.statements.description ?? "" }
+.joined(separator: "\n")
+.replacingOccurrences(of: "\r\n", with: "\n")
+.trimmingCharacters(in: .whitespacesAndNewlines)
+case .getter:
+return "" // already abstract; nothing to hash
+@unknown default:
+return ""
+}
+}
+}
 FILE: Sources/llminty/GraphCentrality.swift
 
 import Foundation
@@ -288,78 +434,11 @@ return out
 /// prefer higher score, then lexicographic path.
 static func orderDependencyAware(_ scored: [ScoredFile]) -> [ScoredFile]  { ... }
 }
-FILE: Sources/llminty/Rendering.swift
-
-// Sources/llminty/Rendering.swift
-import Foundation
-import SwiftParser
-import SwiftSyntax
-struct RenderedFile {
-let relativePath: String
-let content: String
-}
-final class Renderer {
-func render(file: ScoredFile, score: Double) throws -> RenderedFile {
-switch file.analyzed.file.kind {
-case .swift:
-let policy = policyFor(score: score)
-let content = try renderSwift(text: file.analyzed.text, policy: policy)
-return RenderedFile(relativePath: file.analyzed.file.relativePath, content: content)
-case .json:
-let reduced = JSONReducer.reduceJSONPreservingStructure(text: file.analyzed.text)
-return RenderedFile(relativePath: file.analyzed.file.relativePath, content: reduced)
-case .text, .unknown:
-return RenderedFile(
-relativePath: file.analyzed.file.relativePath,
-content: compactText(file.analyzed.text)
-)
-case .binary:
-let size = file.analyzed.file.size
-let type = (file.analyzed.file.relativePath as NSString).pathExtension.lowercased()
-let placeholder = "/* binary \(type.isEmpty ? "file" : type) — \(size) bytes (omitted) */\n"
-return RenderedFile(relativePath: file.analyzed.file.relativePath, content: placeholder)
-}
-}
-// MARK: - Text passes
-private func compactText(_ s: String) -> String { ... }
-private func lightlyCondenseWhitespace(_ s: String) -> String { ... }
-// MARK: - Policy
-enum SwiftPolicy {
-case keepAllBodiesLightlyCondensed            // s ≥ 0.75
-case keepPublicBodiesElideOthers              // 0.50 ≤ s < 0.75
-case keepOneBodyPerTypeElideRest              // 0.25 ≤ s < 0.50
-case signaturesOnly                           // s < 0.25
-}
-func policyFor(score: Double) -> SwiftPolicy { ... }
-// MARK: - Swift elision
-func renderSwift(text: String, policy: SwiftPolicy) throws -> String { ... }
-}
 FILE: Sources/llminty/App.swift
 
 import Foundation
 enum BuiltInExcludes {
-static func defaultPatterns(outputFileName: String) -> [String] {
-// Users can re-include via .mintyignore negation (!) as usual.
-return [
-// VCS / editor
-".git/", ".gitignore", ".gitattributes", ".DS_Store", ".idea/", ".vscode/", ".svn/", ".hg/",
-// SwiftPM
-".build/", ".swiftpm/",
-// Xcode
-"DerivedData/", "*.xcodeproj/", "*.xcworkspace/", "xcuserdata/",
-// Apple bundles/outputs
-"*.app/", "*.appex/", "*.framework/", "*.dSYM/", "*.xcarchive/",
-// Dependency managers
-"Pods/", "Carthage/",
-// Assets / common binaries (leave generic *.dat alone so SnapshotE2E can see bin.dat)
-"*.xcassets/", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.heic", "*.pdf",
-"*.svg", "*.webp", "*.ttf", "*.otf", "*.woff", "*.woff2",
-"*.zip", "*.tar", "*.tar.gz", "*.rar", "*.7z",
-"*.mp3", "*.wav", "*.aiff", "*.m4a", "*.mp4", "*.mov", "*.bin",
-// Self-exclude
-outputFileName
-]
-}
+static func defaultPatterns(outputFileName: String) -> [String] { ... }
 }
 /// Aggressively trims blank lines for final output while keeping exactly one
 /// blank line after each "FILE: " header. Also:
@@ -367,37 +446,7 @@ outputFileName
 /// - collapses 3+ newlines to 2 during pre-pass,
 /// - removes all other blank-only lines.
 /// Returns a string that always ends with a single trailing newline.
-func postProcessMinty(_ s: String) -> String {
-// 1) Trim trailing spaces and collapse extreme newline runs
-let pre = s
-.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression)
-.replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
-// 2) Keep exactly one blank after each header; drop other blank-only lines
-let lines = pre.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
-var result: [String] = []
-result.reserveCapacity(lines.count)
-var justSawHeader = false
-for line in lines {
-let trimmed = line.trimmingCharacters(in: .whitespaces)
-if line.hasPrefix("FILE: ") {
-result.append(trimmed)       // header without trailing spaces
-justSawHeader = true
-continue
-}
-if trimmed.isEmpty {
-if justSawHeader {
-result.append("")        // keep one blank after the header
-}
-// else: drop blank line
-} else {
-result.append(trimmed)       // keep non-blank (trimmed)
-justSawHeader = false
-}
-}
-// 3) Single trailing newline
-let joined = result.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-return joined + "\n"
-}
+func postProcessMinty(_ s: String) -> String { ... }
 public struct LLMintyApp {
 public init() { ... }
 }
@@ -411,6 +460,24 @@ import XCTest
 final class GraphCentralityTests: XCTestCase {
 private func analyzed(_ path: String, deps: [String]) -> AnalyzedFile { ... }
 func testDependencyAwareOrder() { ... }
+}
+FILE: Sources/llminty/main.swift
+
+import Foundation
+// Top-level entrypoint for the executable target.
+// (Do NOT use @main if the module has any other top-level code.)
+do {
+try LLMintyApp().run()
+} catch {
+fputs("llminty: \(error.localizedDescription)\n", stderr)
+exit(1)
+}
+FILE: Tests/LLMintyTests/SwiftAnalyzerTests.swift
+
+import XCTest
+@testable import llminty
+final class SwiftAnalyzerTests: XCTestCase {
+func testEntrypointPublicAPIAndRefs() throws { ... }
 }
 FILE: Sources/llminty/JSONReducer.swift
 
@@ -443,17 +510,6 @@ private static func stringifyDict(_ d: [String: Any], trailingTrimComment: Strin
 // Basic JSON string escaper
 private static func escape(_ s: String) -> String { ... }
 }
-FILE: Sources/llminty/main.swift
-
-import Foundation
-// Top-level entrypoint for the executable target.
-// (Do NOT use @main if the module has any other top-level code.)
-do {
-try LLMintyApp().run()
-} catch {
-fputs("llminty: \(error.localizedDescription)\n", stderr)
-exit(1)
-}
 FILE: Tests/LLMintyTests/GoldenSnapshotTests.swift
 
 // Tests/LLMintyTests/GoldenSnapshotTests.swift
@@ -473,13 +529,6 @@ func testGoldenAgainstSnapshotFixtures() throws { ... }
 func testRegenerateExpectedAndContractIfRequested() throws { ... }
 // MARK: - Pipeline used by both tests
 func runMintyOnZippedSnapshot(_ zip: URL) throws -> String { ... }
-}
-FILE: Tests/LLMintyTests/SwiftAnalyzerTests.swift
-
-import XCTest
-@testable import llminty
-final class SwiftAnalyzerTests: XCTestCase {
-func testEntrypointPublicAPIAndRefs() throws { ... }
 }
 FILE: Tests/LLMintyTests/SnapshotE2ETests.swift
 
@@ -621,9 +670,41 @@ FILE: Tests/LLMintyTests/RenderingTests.swift
 import XCTest
 @testable import llminty
 final class RenderingTests: XCTestCase {
+// MARK: - Shared regex (multi-use)
+/// Regex for a rich sentinel that replaces an implementation body.
+private static let richSentinelPattern =
+#"\{\s*/\*\s*elided-implemented;\s*lines=\d+;\s*h=[0-9a-f]{8,12}\s*\*/\s*\}"#
+private func containsMatch(in text: String, pattern: String) -> Bool { ... }
+// MARK: - Baseline
+/// Maps score to policy.
 func testPolicyForThresholds() { ... }
-func testRenderSwiftElidesNonPublicBodiesUnderPolicy() throws { ... }
-func testRenderTextCompactsWhitespace() throws { ... }
+/// Emits rich sentinel under `.signaturesOnly`.
+func testElidedFuncUsesRichSentinel() throws { ... }
+/// Sentinel hash is stable for identical input.
+func testSentinelHashIsStableForSameInput() throws { ... }
+// MARK: - Core
+/// Policy cutoffs are inclusive.
+func testPolicyBoundariesAreInclusiveAtCutoffs() { ... }
+/// Rendering routes to policy by score.
+func testRenderRoutingUsesScoreToSelectPolicy() throws { ... }
+/// Keep-all preserves bodies and `{ ... }`.
+func testKeepAllBodiesDoesNotElideOrCanonicalize() throws { ... }
+/// Under keep-public, `open` kept; `internal`/`package` elided.
+func testOpenIsKept_InternalAndPackageAreElided() throws { ... }
+/// Keep-one keeps only the first executable per container.
+func testOneBodyPerContainerOnlyFirstExecutableIsKept() throws { ... }
+/// Computed properties don't take the "one body" slot.
+func testComputedPropertiesDoNotCountTowardOne() throws { ... }
+/// Extensions are separate containers for keep-one.
+func testExtensionsAreSeparateContainers() throws { ... }
+/// Accessors use sentinel only under `.signaturesOnly`.
+func testAccessorsSentinelOnlyUnderSignaturesOnly() throws { ... }
+/// Empty `{ ... }` canonicalized to `{ ... }` unless keep-all.
+func testCanonicalizeEmptyBlocksOnlyWhenPolicyIsNotKeepAll() throws { ... }
+/// Compacts 3+ blank lines to 1 for text and unknown files.
+func testTextAndUnknownWhitespaceIsCompacted() throws { ... }
+/// Binary files show a size placeholder.
+func testBinaryFilesEmitSizePlaceholder() throws { ... }
 }
 FILE: Tests/LLMintyTests/ScoringTests.swift
 
@@ -795,7 +876,7 @@ func testScanningKindsAndIgnores() throws { ... }
 }
 FILE: Tests/LLMintyTests/Fixtures/contract_spec.json
 
-{ "version": 2, "must_have_tokens": { "Sources/llminty/GraphCentrality.swift": ["orderDependencyAware("], "Sources/llminty/App.swift": ["BuiltInExcludes", "LLMintyApp", "func run(", "postProcessMinty("], "Sources/llminty/Scoring.swift": ["func score("], "Sources/llminty/JSONReducer.swift": ["reduceJSONPreservingStructure(", "reduce(", "reduceArray(", /* trimmed 1 items */, "stringify(", "escape("], "Sources/llminty/IgnoreMatcher.swift": ["parse(line:", "func isIgnored(", "match(pattern", "matchFrom("], "Sources/llminty/FileScanner.swift": ["func scan()", "seemsBinary(", "relativePath(from", "path(replacingBase"], /* trimmed 2 keys */ }, "must_include_files": ["Sources/llminty/IgnoreMatcher.swift", "Sources/llminty/FileScanner.swift", "Sources/llminty/SwiftAnalyzer.swift", /* trimmed 5 items */, "Sources/llminty/main.swift", "Package.swift"] }
+{ "must_include_files": ["Sources/llminty/IgnoreMatcher.swift", "Sources/llminty/FileScanner.swift", "Sources/llminty/SwiftAnalyzer.swift", /* trimmed 5 items */, "Sources/llminty/main.swift", "Package.swift"], "version": 2, "must_have_tokens": { "Sources/llminty/GraphCentrality.swift": ["orderDependencyAware("], "Sources/llminty/SwiftAnalyzer.swift": ["final class SwiftAnalyzer", "func analyze(", "analyzeSwift(", /* trimmed 9 items */, "TokenSyntax", "inheritanceClauseContains("], "Sources/llminty/JSONReducer.swift": ["reduceJSONPreservingStructure(", "reduce(", "reduceArray(", /* trimmed 1 items */, "stringify(", "escape("], "Sources/llminty/IgnoreMatcher.swift": ["parse(line:", "func isIgnored(", "match(pattern", "matchFrom("], "Sources/llminty/App.swift": ["BuiltInExcludes", "LLMintyApp", "func run(", "postProcessMinty("], "Sources/llminty/Rendering.swift": ["SwiftPolicy", "func policyFor(", "func renderSwift(", "lightlyCondenseWhitespace(", "compactText("], /* trimmed 2 keys */ } }
 FILE: Tests/LLMintyTests/Fixtures/expected_minty.txt
 
 FILE: Sources/llminty/IgnoreMatcher.swift
