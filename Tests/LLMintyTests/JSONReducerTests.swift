@@ -3,8 +3,12 @@ import XCTest
 
 // Tiny shim so we always call the reducer via the module namespace.
 private func reduceJSON(_ input: String) -> String {
-    // @testable import exposes internal APIs; qualify with module name to avoid shadowing.
-    return llminty.JSONReducer.reduceJSONPreservingStructure(text: input)
+    // Call the new namespaced entry point with explicit thresholds.
+    return llminty.JSONReducer.reduceJSONPreservingStructure(
+        input,
+        arrayThreshold: 5,
+        dictThreshold: 6
+    )
 }
 
 final class JSONReducerTests: XCTestCase {
@@ -25,16 +29,17 @@ final class JSONReducerTests: XCTestCase {
             expectedTemplate: #""arr": [ 1, 2, 3, «ANY»/* trimmed 5 items */«ANY», 9, 10 ]"#,
             source: input
         )
-        // Dict trimmed sentinel present.
+        // Dict trimmed sentinel present (1 collection + 8 scalars, keep 6 scalars → trimmed 2).
         assertTextMatchesTemplate(
             actual: reduced,
-            expectedTemplate: #"/* trimmed 3 keys */"#,
+            expectedTemplate: #"/* trimmed 2 keys */"#,
             source: input
         )
     }
 
     func testDictJustOverThreshold_addsSentinel() {
-        let input = #"{ "arr": [1,2,3,9,10], "a":1, "b":2, "c":3, "d":4, "e":5, "f":6 }"#
+        // 1 collection + 7 scalars (total 8) with dictThreshold=6 → trimmed 1
+        let input = #"{ "arr": [1,2,3,9,10], "a":1, "b":2, "c":3, "d":4, "e":5, "f":6, "g":7 }"#
         let reduced = reduceJSON(input)
 
         assertTextMatchesTemplate(
@@ -59,14 +64,16 @@ final class JSONReducerTests: XCTestCase {
             expectedTemplate: #""outer": [ 1, 2, 3, «ANY»/* trimmed 4 items */«ANY», 8, 9 ]"#,
             source: input
         )
+        // Inner object has 7 scalars with dictThreshold=6 → trimmed 1.
         assertTextMatchesTemplate(
             actual: reduced,
             expectedTemplate: #""obj": «ANY»/* trimmed 1 keys */"#,
             source: input
         )
+        // Outer object: 2 collections + 7 scalars, keep 6 scalars → trimmed 1.
         assertTextMatchesTemplate(
             actual: reduced,
-            expectedTemplate: #"/* trimmed 3 keys */"#,
+            expectedTemplate: #"/* trimmed 1 keys */"#,
             source: input
         )
     }
@@ -87,7 +94,7 @@ final class JSONReducerTests: XCTestCase {
         let input = #"{ "arr": [1,2,3,9,10], "a":1, "b":2, "c":3, "d":4, "e":5 }"#
         let reduced = reduceJSON(input)
 
-        // Array untouched and no dict sentinel at this threshold (6 keys total including "arr").
+        // Array untouched and no dict sentinel at this threshold (1 collection + 5 scalars → trimmed 0).
         assertTextMatchesTemplate(
             actual: reduced,
             expectedTemplate: #""arr": [ 1, 2, 3, 9, 10 ]"#,
@@ -119,7 +126,7 @@ final class JSONReducerTests: XCTestCase {
     }
 
     func testObjectExactlyAtBoundary_isNotTrimmed() {
-        // maximumDictionaryKeysKept = 6 → no marker when total keys == 6
+        // dictThreshold = 6 → no marker when total scalar keys == 6
         let input = #"{ "a":1, "b":2, "c":3, "d":4, "e":5, "f":6 }"#
         let reduced = reduceJSON(input)
         assertTextNotMatchTemplate(
@@ -130,8 +137,8 @@ final class JSONReducerTests: XCTestCase {
     }
 
     func testLargeObject_prefersCollectionsBeforeScalars() {
-        // 8 keys total; keep 6 → trimmed 2
-        let input = #"{ "a":1, "b":2, "c":3, "A":[1,2,3], "B":{"x":1}, "C":[4], "d":4, "e":5 }"#
+        // 3 collections + 8 scalars (total 11); keep 3 collections and 6 scalars → trimmed 2
+        let input = #"{ "a":1, "b":2, "c":3, "A":[1,2,3], "B":{"x":1}, "C":[4], "d":4, "e":5, "f":6, "g":7, "h":8 }"#
         let reduced = reduceJSON(input)
 
         // Sentinel count is right.
