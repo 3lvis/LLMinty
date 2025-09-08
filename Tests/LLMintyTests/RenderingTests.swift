@@ -1,7 +1,42 @@
+import Foundation
 import XCTest
 @testable import llminty
 
 final class RenderingTests: XCTestCase {
+
+    // Minimal, local regex helpers (pure XCTest; no external test utilities).
+    private static let sentinelPattern = #"/\*\s*elided-implemented;\s*lines=\d+;\s*h=[0-9a-f]{8,12}\s*\*/"#
+    private static let emptyPattern     = #"/\*\s*empty\s*\*/"#
+
+    private func assertMatches(_ text: String, pattern: String, file: StaticString = #filePath, line: UInt = #line) {
+        let regex = try! NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators])
+        let range = NSRange(text.startIndex..., in: text)
+        let ok = regex.firstMatch(in: text, options: [], range: range) != nil
+        XCTAssertTrue(ok, """
+        Expected to match regex:
+        
+        \(pattern)
+        
+        In text:
+        
+        \(text)
+        """, file: file, line: line)
+    }
+
+    private func assertNotMatches(_ text: String, pattern: String, file: StaticString = #filePath, line: UInt = #line) {
+        let regex = try! NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators])
+        let range = NSRange(text.startIndex..., in: text)
+        let ok = regex.firstMatch(in: text, options: [], range: range) == nil
+        XCTAssertTrue(ok, """
+        Expected NOT to match regex, but it did:
+        
+        \(pattern)
+        
+        In text:
+        
+        \(text)
+        """, file: file, line: line)
+    }
 
     // MARK: - Baseline
 
@@ -12,6 +47,17 @@ final class RenderingTests: XCTestCase {
         XCTAssertEqual(renderer.policyFor(score: 0.60), .keepPublicBodiesElideOthers)
         XCTAssertEqual(renderer.policyFor(score: 0.30), .keepOneBodyPerTypeElideRest)
         XCTAssertEqual(renderer.policyFor(score: 0.10), .signaturesOnly)
+    }
+
+    /// Policy cutoffs are inclusive.
+    func testPolicyBoundariesAreInclusiveAtCutoffs() {
+        let renderer = Renderer()
+        XCTAssertEqual(renderer.policyFor(score: 0.8000), .keepAllBodiesLightlyCondensed)
+        XCTAssertEqual(renderer.policyFor(score: 0.7999), .keepPublicBodiesElideOthers)
+        XCTAssertEqual(renderer.policyFor(score: 0.6000), .keepPublicBodiesElideOthers)
+        XCTAssertEqual(renderer.policyFor(score: 0.5999), .keepOneBodyPerTypeElideRest)
+        XCTAssertEqual(renderer.policyFor(score: 0.3000), .keepOneBodyPerTypeElideRest)
+        XCTAssertEqual(renderer.policyFor(score: 0.2999), .signaturesOnly)
     }
 
     // MARK: - Core body elision / sentinels
@@ -27,11 +73,9 @@ final class RenderingTests: XCTestCase {
             }
         }
         """
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .signaturesOnly,
-            expectedTemplate: #"func recompute(_ n: Int) -> Int { «SENTINEL» }"#
-        )
+        let out = try Renderer().renderSwift(text: source, policy: .signaturesOnly)
+        let pattern = #"func\s+recompute\(\s*_?\s*n\s*:\s*Int\s*\)\s*->\s*Int\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#
+        assertMatches(out, pattern: pattern)
     }
 
     /// Sentinel hash is stable for identical input.
@@ -47,29 +91,15 @@ final class RenderingTests: XCTestCase {
         let second = try renderer.renderSwift(text: source, policy: .signaturesOnly)
 
         let capture = #"h=([0-9a-f]{8,12})"#
-        let regex = try! NSRegularExpression(pattern: capture)
-
-        func grabHash(_ s: String) -> String? {
-            let range = NSRange(s.startIndex..., in: s)
-            return regex.firstMatch(in: s, range: range).map { (s as NSString).substring(with: $0.range(at: 1)) }
+        let rx = try! NSRegularExpression(pattern: capture)
+        func grab(_ s: String) -> String? {
+            let r = NSRange(s.startIndex..., in: s)
+            return rx.firstMatch(in: s, options: [], range: r).map { (s as NSString).substring(with: $0.range(at: 1)) }
         }
-
-        guard let h1 = grabHash(first), let h2 = grabHash(second) else {
-            XCTFail("expected short hash in both renders")
-            return
+        guard let h1 = grab(first), let h2 = grab(second) else {
+            return XCTFail("expected short hash in both renders")
         }
         XCTAssertEqual(h1, h2)
-    }
-
-    /// Policy cutoffs are inclusive.
-    func testPolicyBoundariesAreInclusiveAtCutoffs() {
-        let renderer = Renderer()
-        XCTAssertEqual(renderer.policyFor(score: 0.8000), .keepAllBodiesLightlyCondensed)
-        XCTAssertEqual(renderer.policyFor(score: 0.7999), .keepPublicBodiesElideOthers)
-        XCTAssertEqual(renderer.policyFor(score: 0.6000), .keepPublicBodiesElideOthers)
-        XCTAssertEqual(renderer.policyFor(score: 0.5999), .keepOneBodyPerTypeElideRest)
-        XCTAssertEqual(renderer.policyFor(score: 0.3000), .keepOneBodyPerTypeElideRest)
-        XCTAssertEqual(renderer.policyFor(score: 0.2999), .signaturesOnly)
     }
 
     /// Rendering routes to policy by score and uses rich sentinels for elided non-public bodies.
@@ -95,46 +125,22 @@ final class RenderingTests: XCTestCase {
         // keepAll: both bodies present
         do {
             let content = try renderer.render(file: ScoredFile(analyzed: analyzed, score: 0.85, fanIn: 0, pageRank: 0), score: 0.85).content
-            assertTextMatchesTemplate(
-                actual: content,
-                expectedTemplate: #"public func keepMe() { «ANY»PUBLIC_BODY«ANY» }"#,
-                source: analyzed.text
-            )
-            assertTextMatchesTemplate(
-                actual: content,
-                expectedTemplate: #"func dropMe() { «ANY»INTERNAL_BODY«ANY» }"#,
-                source: analyzed.text
-            )
+            assertMatches(content, pattern: #"public\s+func\s+keepMe\([^\)]*\)\s*\{\s*(?s:.*)PUBLIC_BODY(?s:.*)\}"#)
+            assertMatches(content, pattern: #"\bfunc\s+dropMe\([^\)]*\)\s*\{\s*(?s:.*)INTERNAL_BODY(?s:.*)\}"#)
         }
 
         // keepPublic: public body kept; internal elided
         do {
             let content = try renderer.render(file: ScoredFile(analyzed: analyzed, score: 0.65, fanIn: 0, pageRank: 0), score: 0.65).content
-            assertTextMatchesTemplate(
-                actual: content,
-                expectedTemplate: #"public func keepMe() { «ANY»PUBLIC_BODY«ANY» }"#,
-                source: analyzed.text
-            )
-            assertTextMatchesTemplate(
-                actual: content,
-                expectedTemplate: #"func dropMe() { «SENTINEL» }"#,
-                source: analyzed.text
-            )
+            assertMatches(content, pattern: #"public\s+func\s+keepMe\([^\)]*\)\s*\{\s*(?s:.*)PUBLIC_BODY(?s:.*)\}"#)
+            assertMatches(content, pattern: #"\bfunc\s+dropMe\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
         }
 
         // signaturesOnly: both elided
         do {
             let content = try renderer.render(file: ScoredFile(analyzed: analyzed, score: 0.25, fanIn: 0, pageRank: 0), score: 0.25).content
-            assertTextMatchesTemplate(
-                actual: content,
-                expectedTemplate: #"public func keepMe() { «SENTINEL» }"#,
-                source: analyzed.text
-            )
-            assertTextMatchesTemplate(
-                actual: content,
-                expectedTemplate: #"func dropMe() { «SENTINEL» }"#,
-                source: analyzed.text
-            )
+            assertMatches(content, pattern: #"public\s+func\s+keepMe\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
+            assertMatches(content, pattern: #"\bfunc\s+dropMe\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
         }
     }
 
@@ -146,16 +152,9 @@ final class RenderingTests: XCTestCase {
             func nonEmpty() { print("X") }
         }
         """
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepAllBodiesLightlyCondensed,
-            expectedTemplate: #"func empty() { }"#
-        )
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepAllBodiesLightlyCondensed,
-            expectedTemplate: #"func nonEmpty() { «ANY»X«ANY» }"#
-        )
+        let out = try Renderer().renderSwift(text: source, policy: .keepAllBodiesLightlyCondensed)
+        assertMatches(out, pattern: #"\bfunc\s+empty\(\)\s*\{\s*\}"#)
+        assertMatches(out, pattern: #"\bfunc\s+nonEmpty\(\)\s*\{\s*(?s:.*)X(?s:.*)\}"#)
     }
 
     /// Under keep-public, `open` kept; `internal`/`package` elided with rich sentinel; truly empty becomes `{ /* empty */ }`.
@@ -165,24 +164,14 @@ final class RenderingTests: XCTestCase {
         struct IC { func i() { print("I") } }
         package func pkg() { print("P") }
         """
+        let out = try Renderer().renderSwift(text: source, policy: .keepPublicBodiesElideOthers)
+
         // open kept
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepPublicBodiesElideOthers,
-            expectedTemplate: #"open func of() { «ANY»O«ANY» }"#
-        )
+        assertMatches(out, pattern: #"open\s+func\s+of\([^\)]*\)\s*\{\s*(?s:.*)O(?s:.*)\}"#)
         // internal elided
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepPublicBodiesElideOthers,
-            expectedTemplate: #"func i() { «SENTINEL» }"#
-        )
+        assertMatches(out, pattern: #"\bfunc\s+i\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
         // package elided
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepPublicBodiesElideOthers,
-            expectedTemplate: #"package func pkg() { «SENTINEL» }"#
-        )
+        assertMatches(out, pattern: #"\bpackage\s+func\s+pkg\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
     }
 
     /// Keep-one keeps only the first executable per container; elided ones use rich sentinel.
@@ -194,21 +183,10 @@ final class RenderingTests: XCTestCase {
             func third() { print("THIRD") }
         }
         """
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepOneBodyPerTypeElideRest,
-            expectedTemplate: #"init() { «ANY»FIRST«ANY» }"#
-        )
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepOneBodyPerTypeElideRest,
-            expectedTemplate: #"func second() { «SENTINEL» }"#
-        )
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepOneBodyPerTypeElideRest,
-            expectedTemplate: #"func third() { «SENTINEL» }"#
-        )
+        let out = try Renderer().renderSwift(text: source, policy: .keepOneBodyPerTypeElideRest)
+        assertMatches(out, pattern: #"\binit\(\)\s*\{\s*(?s:.*)FIRST(?s:.*)\}"#)
+        assertMatches(out, pattern: #"\bfunc\s+second\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
+        assertMatches(out, pattern: #"\bfunc\s+third\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
     }
 
     /// Computed properties: accessors that are elided use rich sentinel when non-empty; do not claim the keep-one slot.
@@ -220,21 +198,10 @@ final class RenderingTests: XCTestCase {
             func elided() { print("ELIDED") }
         }
         """
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepOneBodyPerTypeElideRest,
-            expectedTemplate: #"var v: Int { «SENTINEL» }"#
-        )
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepOneBodyPerTypeElideRest,
-            expectedTemplate: #"func kept() { «ANY»KEPT«ANY» }"#
-        )
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepOneBodyPerTypeElideRest,
-            expectedTemplate: #"func elided() { «SENTINEL» }"#
-        )
+        let out = try Renderer().renderSwift(text: source, policy: .keepOneBodyPerTypeElideRest)
+        assertMatches(out, pattern: #"\bvar\s+v\s*:\s*Int\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
+        assertMatches(out, pattern: #"\bfunc\s+kept\([^\)]*\)\s*\{\s*(?s:.*)KEPT(?s:.*)\}"#)
+        assertMatches(out, pattern: #"\bfunc\s+elided\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
     }
 
     /// Extensions are separate containers for keep-one.
@@ -249,26 +216,15 @@ final class RenderingTests: XCTestCase {
             func x2() { print("X2") }
         }
         """
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepOneBodyPerTypeElideRest,
-            expectedTemplate: #"func e1() { «ANY»E1«ANY» }"#
-        )
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepOneBodyPerTypeElideRest,
-            expectedTemplate: #"func e2() { «SENTINEL» }"#
-        )
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepOneBodyPerTypeElideRest,
-            expectedTemplate: #"extension E { «ANY»func x1() { «ANY»X1«ANY» }«ANY» }"#
-        )
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepOneBodyPerTypeElideRest,
-            expectedTemplate: #"extension E { «ANY»func x2() { «SENTINEL» }«ANY» }"#
-        )
+        let out = try Renderer().renderSwift(text: source, policy: .keepOneBodyPerTypeElideRest)
+
+        // struct E { e1 kept; e2 elided }
+        assertMatches(out, pattern: #"\bfunc\s+e1\([^\)]*\)\s*\{\s*(?s:.*)E1(?s:.*)\}"#)
+        assertMatches(out, pattern: #"\bfunc\s+e2\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
+
+        // extension E { x1 kept; x2 elided }
+        assertMatches(out, pattern: #"\bextension\s+E\b(?s:.*)\bfunc\s+x1\([^\)]*\)\s*\{\s*(?s:.*)X1(?s:.*)\}"#)
+        assertMatches(out, pattern: #"\bextension\s+E\b(?s:.*)\bfunc\s+x2\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
     }
 
     /// Accessors use rich sentinel whenever elided and non-empty (not only under `.signaturesOnly`).
@@ -281,16 +237,14 @@ final class RenderingTests: XCTestCase {
             }
         }
         """
-        try assertRenderContainsTemplate(
-            source: internalSource,
-            policy: .signaturesOnly,
-            expectedTemplate: #"var value: Int { «SENTINEL» }"#
-        )
-        try assertRenderContainsTemplate(
-            source: internalSource,
-            policy: .keepPublicBodiesElideOthers,
-            expectedTemplate: #"var value: Int { «SENTINEL» }"#
-        )
+        do {
+            let out = try Renderer().renderSwift(text: internalSource, policy: .signaturesOnly)
+            assertMatches(out, pattern: #"\bvar\s+value\s*:\s*Int\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
+        }
+        do {
+            let out = try Renderer().renderSwift(text: internalSource, policy: .keepPublicBodiesElideOthers)
+            assertMatches(out, pattern: #"\bvar\s+value\s*:\s*Int\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
+        }
 
         let publicSource = """
         public struct A {
@@ -300,11 +254,11 @@ final class RenderingTests: XCTestCase {
             }
         }
         """
-        try assertRenderNotMatchTemplate(
-            source: publicSource,
-            policy: .keepPublicBodiesElideOthers,
-            unexpectedTemplate: #"var value: Int { «SENTINEL» }"#
-        )
+        do {
+            let out = try Renderer().renderSwift(text: publicSource, policy: .keepPublicBodiesElideOthers)
+            // Ensure the property is NOT elided (no sentinel at that site).
+            assertNotMatches(out, pattern: #"\bvar\s+value\s*:\s*Int\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
+        }
     }
 
     /// NEW: Implicit getter bodies must produce rich sentinel when elided (regression test).
@@ -320,16 +274,9 @@ final class RenderingTests: XCTestCase {
             }
         }
         """
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepPublicBodiesElideOthers,
-            expectedTemplate: #"var containsPublicOrOpen: Bool { «SENTINEL» }"#
-        )
-        try assertRenderNotMatchTemplate(
-            source: source,
-            policy: .keepPublicBodiesElideOthers,
-            unexpectedTemplate: #"var containsPublicOrOpen: Bool { «EMPTY» }"#
-        )
+        let out = try Renderer().renderSwift(text: source, policy: .keepPublicBodiesElideOthers)
+        assertMatches(out, pattern: #"\bvar\s+containsPublicOrOpen\s*:\s*Bool\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
+        assertNotMatches(out, pattern: #"\bvar\s+containsPublicOrOpen\s*:\s*Bool\s*\{\s*\#(RenderingTests.emptyPattern)\s*\}"#)
     }
 
     /// Empty `{}` canonicalized to `{ /* empty */ }` unless keep-all; also assert rich sentinel appears for non-empty elisions.
@@ -341,28 +288,18 @@ final class RenderingTests: XCTestCase {
         }
         """
         // keep-all: raw braces preserved
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepAllBodiesLightlyCondensed,
-            expectedTemplate: #"func empty() { }"#
-        )
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepAllBodiesLightlyCondensed,
-            expectedTemplate: #"func nonEmpty() { «ANY»Z«ANY» }"#
-        )
+        do {
+            let out = try Renderer().renderSwift(text: source, policy: .keepAllBodiesLightlyCondensed)
+            assertMatches(out, pattern: #"\bfunc\s+empty\(\)\s*\{\s*\}"#)
+            assertMatches(out, pattern: #"\bfunc\s+nonEmpty\(\)\s*\{\s*(?s:.*)Z(?s:.*)\}"#)
+        }
 
         // keep-public: empty canonicalized; non-empty elided with sentinel
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepPublicBodiesElideOthers,
-            expectedTemplate: #"func empty() { «EMPTY» }"#
-        )
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .keepPublicBodiesElideOthers,
-            expectedTemplate: #"func nonEmpty() { «SENTINEL» }"#
-        )
+        do {
+            let out = try Renderer().renderSwift(text: source, policy: .keepPublicBodiesElideOthers)
+            assertMatches(out, pattern: #"\bfunc\s+empty\(\)\s*\{\s*\#(RenderingTests.emptyPattern)\s*\}"#)
+            assertMatches(out, pattern: #"\bfunc\s+nonEmpty\(\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
+        }
     }
 
     /// Compacts 3+ blank lines to 1 for text and unknown files.
@@ -381,28 +318,12 @@ final class RenderingTests: XCTestCase {
         )
 
         let textResult = try Renderer().render(file: ScoredFile(analyzed: textFile, score: 0.1, fanIn: 0, pageRank: 0.0), score: 0.1).content
-        assertTextNotMatchTemplate(
-            actual: textResult,
-            unexpectedTemplate: "a\n\n\n b\n",
-            source: textFile.text
-        )
-        assertTextMatchesTemplate(
-            actual: textResult,
-            expectedTemplate: "a\n\n b\n",
-            source: textFile.text
-        )
+        XCTAssertNotEqual(textResult, "a\n\n\n b\n")
+        XCTAssertEqual(textResult, "a\n\n b\n")
 
         let unknownResult = try Renderer().render(file: ScoredFile(analyzed: unknownFile, score: 0.2, fanIn: 0, pageRank: 0.0), score: 0.2).content
-        assertTextNotMatchTemplate(
-            actual: unknownResult,
-            unexpectedTemplate: "x\n\n\n y\n",
-            source: unknownFile.text
-        )
-        assertTextMatchesTemplate(
-            actual: unknownResult,
-            expectedTemplate: "x\n\n y\n",
-            source: unknownFile.text
-        )
+        XCTAssertNotEqual(unknownResult, "x\n\n\n y\n")
+        XCTAssertEqual(unknownResult, "x\n\n y\n")
     }
 
     /// Binary files show a size placeholder.
@@ -415,11 +336,7 @@ final class RenderingTests: XCTestCase {
         )
         let scored = ScoredFile(analyzed: analyzed, score: 0.5, fanIn: 0, pageRank: 0)
         let content = try Renderer().render(file: scored, score: scored.score).content
-        assertTextMatchesTemplate(
-            actual: content,
-            expectedTemplate: #"binary omitted; size=1234 bytes"#,
-            source: "binary placeholder"
-        )
+        XCTAssertEqual(content, "binary omitted; size=1234 bytes")
     }
 
     // MARK: - New rendering coverage
@@ -433,11 +350,9 @@ final class RenderingTests: XCTestCase {
             }
         }
         """
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .signaturesOnly,
-            expectedTemplate: #"subscript(«ANY») -> «ANY» { «SENTINEL» }"#
-        )
+        let out = try Renderer().renderSwift(text: source, policy: .signaturesOnly)
+        let pattern = #"\bsubscript\([\s\S]*?\)\s*->\s*[\s\S]*?\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#
+        assertMatches(out, pattern: pattern)
     }
 
     func testDeinitUsesSentinelWhenElided() throws {
@@ -446,10 +361,7 @@ final class RenderingTests: XCTestCase {
             deinit { print("BYE") }
         }
         """
-        try assertRenderContainsTemplate(
-            source: source,
-            policy: .signaturesOnly,
-            expectedTemplate: #"deinit { «SENTINEL» }"#
-        )
+        let out = try Renderer().renderSwift(text: source, policy: .signaturesOnly)
+        assertMatches(out, pattern: #"\bdeinit\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
     }
 }
