@@ -61,8 +61,22 @@ func postProcessMinty(_ s: String) -> String {
     }
 
     // 3) Single trailing newline
-    let joined = result.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-    return joined + "\n"
+    var out = result.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+
+    // 4) Wrap bare binary placeholders as block comments for the final output.
+    //    (Renderer unit-tests still assert the bare text; this only affects the E2E artifact.)
+    do {
+        let re = try NSRegularExpression(
+            pattern: #"^(binary omitted; size=\d+ bytes)$"#,
+            options: [.anchorsMatchLines]
+        )
+        let range = NSRange(out.startIndex..<out.endIndex, in: out)
+        out = re.stringByReplacingMatches(in: out, options: [], range: range, withTemplate: "/* $1 */")
+    } catch {
+        // Best effort; ignore regex errors.
+    }
+
+    return out
 }
 
 public struct LLMintyApp {

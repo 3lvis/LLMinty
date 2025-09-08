@@ -21,14 +21,14 @@ if let pat = Self.parse(line: line) { list.append(pat) }
 self.ordered = list
 }
 // MARK: - Parser
-private static func parse(line: String) -> Pattern? { ... }
+private static func parse(line: String) -> Pattern? { /* elided-implemented; lines=19; h=7ce40768c0 */ }
 // MARK: - Eval
-func isIgnored(_ relativePath: String, isDirectory: Bool) -> Bool { ... }
-private static func match(pattern p: Pattern, pathSegments: [String]) -> Bool { ... }
+func isIgnored(_ relativePath: String, isDirectory: Bool) -> Bool { /* elided-implemented; lines=26; h=7c1dde36c6 */ }
+private static func match(pattern p: Pattern, pathSegments: [String]) -> Bool { /* elided-implemented; lines=2; h=d102b61226 */ }
 // Segment matcher for '*' and '?'
-private static func matchSegment(_ pat: String, _ txt: String) -> Bool { ... }
+private static func matchSegment(_ pat: String, _ txt: String) -> Bool { /* elided-implemented; lines=30; h=ec0f3b0a8f */ }
 // '**' matches zero or more segments. '*' matches within a segment (no '/').
-private static func matchFrom(patternSegs: [String], pathSegs: [String], startAt: Int) -> Bool { ... }
+private static func matchFrom(patternSegs: [String], pathSegs: [String], startAt: Int) -> Bool { /* elided-implemented; lines=20; h=7e46aaf6ed */ }
 }
 FILE: Sources/llminty/FileScanner.swift
 
@@ -88,7 +88,7 @@ results.append(RepoFile(relativePath: relClean, absoluteURL: url, isDirectory: f
 results.sort { $0.relativePath < $1.relativePath }
 return results
 }
-static func seemsBinary(url: URL) -> Bool { ... }
+static func seemsBinary(url: URL) -> Bool { /* elided-implemented; lines=11; h=e34c775dce */ }
 }
 // MARK: - Path helpers
 private extension String {
@@ -96,10 +96,10 @@ func removingPrefix(_ p: String) -> String {
 guard hasPrefix(p) else { return self }
 return String(dropFirst(p.count))
 }
-func relativePath(from root: String) -> String { ... }
+func relativePath(from root: String) -> String { /* elided-implemented; lines=5; h=b7db04440f */ }
 }
 extension String {
-func path(replacingBase base: String) -> String { ... }
+func path(replacingBase base: String) -> String { /* elided-implemented; lines=3; h=ba7b3d4170 */ }
 }
 FILE: Sources/llminty/SwiftAnalyzer.swift
 
@@ -154,7 +154,7 @@ analyzed[i].inboundRefCount = inbound[analyzed[i].file.relativePath] ?? 0
 }
 return analyzed
 }
-private func analyzeSwift(path: String, text: String) -> AnalyzedFile { ... }
+private func analyzeSwift(path: String, text: String) -> AnalyzedFile { /* elided-implemented; lines=17; h=77df369873 */ }
 }
 // MARK: - Collector with SwiftSyntax
 private struct CollectorContext {
@@ -173,31 +173,31 @@ init(context: inout CollectorContext)  {
 self.ctx = withUnsafeMutablePointer(to: &context) { $0 }
 super.init(viewMode: .sourceAccurate)
 }
-override func visit(_ node: ImportDeclSyntax) -> SyntaxVisitorContinueKind  { ... }
-override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind  { ... }
-override func visitPost(_ node: StructDeclSyntax)  { ... }
-override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind  { ... }
-override func visitPost(_ node: ClassDeclSyntax)  { ... }
-override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind  { ... }
-override func visitPost(_ node: EnumDeclSyntax)  { ... }
-override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind  { ... }
-override func visitPost(_ node: ProtocolDeclSyntax)  { ... }
-override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind  { ... }
-override func visit(_ node: SourceFileSyntax) -> SyntaxVisitorContinueKind  { ... }
-override func visitPost(_ node: SourceFileSyntax)  { ... }
+override func visit(_ node: ImportDeclSyntax) -> SyntaxVisitorContinueKind { /* elided-implemented; lines=3; h=d518c2787c */ }
+override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind { /* elided-implemented; lines=7; h=0cbdbd2709 */ }
+override func visitPost(_ node: StructDeclSyntax) { /* elided-implemented; lines=1; h=9258e083d9 */ }
+override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind { /* elided-implemented; lines=6; h=88327f0a72 */ }
+override func visitPost(_ node: ClassDeclSyntax) { /* elided-implemented; lines=1; h=9258e083d9 */ }
+override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind { /* elided-implemented; lines=6; h=88327f0a72 */ }
+override func visitPost(_ node: EnumDeclSyntax) { /* elided-implemented; lines=1; h=9258e083d9 */ }
+override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind { /* elided-implemented; lines=6; h=214e739581 */ }
+override func visitPost(_ node: ProtocolDeclSyntax) { /* elided-implemented; lines=1; h=9258e083d9 */ }
+override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind { /* elided-implemented; lines=3; h=4c06e70218 */ }
+override func visit(_ node: SourceFileSyntax) -> SyntaxVisitorContinueKind { /* elided-implemented; lines=8; h=080907ee1f */ }
+override func visitPost(_ node: SourceFileSyntax)  { /* empty */ }
 // Types referenced
-override func visit(_ node: IdentifierTypeSyntax) -> SyntaxVisitorContinueKind  { ... }
-override func visit(_ node: MemberTypeSyntax) -> SyntaxVisitorContinueKind  { ... }
+override func visit(_ node: IdentifierTypeSyntax) -> SyntaxVisitorContinueKind { /* elided-implemented; lines=4; h=256a8c808f */ }
+override func visit(_ node: MemberTypeSyntax) -> SyntaxVisitorContinueKind { /* elided-implemented; lines=4; h=90e5e5cb5d */ }
 // Complexity: count control-flow keywords and boolean ops
-override func visit(_ token: TokenSyntax) -> SyntaxVisitorContinueKind  { ... }
+override func visit(_ token: TokenSyntax) -> SyntaxVisitorContinueKind { /* elided-implemented; lines=11; h=b382655b0e */ }
 }
 // MARK: - Small helpers
 // Make this module-internal so Rendering.swift can reuse it
 extension DeclModifierListSyntax {
-var containsPublicOrOpen: Bool { ... }
+var containsPublicOrOpen : Bool { /* elided-implemented; lines=6; h=1274ea2fb3 */ }
 }
 extension Optional where Wrapped == DeclModifierListSyntax {
-var containsPublicOrOpen: Bool { ... }
+var containsPublicOrOpen : Bool { /* elided-implemented; lines=1; h=5e698e2910 */ }
 }
 private extension StructDeclSyntax {
 func inheritanceClauseContains(type: String) -> Bool  {
@@ -247,7 +247,7 @@ norm.influenceMax = max(norm.influenceMax, a.outgoingFileDeps.count)
 norm.complexityMax = max(norm.complexityMax, a.complexity)
 }
 // Safe division
-func nzDiv(_ num: Double, by den: Double) -> Double { ... }
+func nzDiv(_ num: Double, by den: Double) -> Double { den == 0 ? 0 : (num / den) }
 var out: [ScoredFile] = []
 out.reserveCapacity(analyzed.count)
 for a in analyzed {
@@ -325,7 +325,7 @@ return out
 /// Dependency-aware emission order:
 /// If A depends on B, emit B before A. When multiple nodes are available,
 /// prefer higher score, then lexicographic path.
-static func orderDependencyAware(_ scored: [ScoredFile]) -> [ScoredFile]  { ... }
+static func orderDependencyAware(_ scored: [ScoredFile]) -> [ScoredFile] { /* elided-implemented; lines=58; h=288bf8e07d */ }
 }
 FILE: Sources/llminty/Rendering.swift
 
@@ -337,12 +337,12 @@ let relativePath: String
 let content: String
 }
 final class Renderer {
-func render(file: ScoredFile, score: Double) throws -> RenderedFile { /* elided-implemented; lines=18; h=36ac1ba876 */ }
+func render(file: ScoredFile, score: Double) throws -> RenderedFile { /* elided-implemented; lines=18; h=ba8766b17e */ }
 // MARK: - Text compaction
 /// For .text / .unknown: trim trailing spaces per line, collapse runs of blank lines to a single blank.
-private func compactText(_ s: String) -> String  { /* elided-implemented; lines=17; h=fde0fa5134 */ }
+private func compactText(_ s: String) -> String { /* elided-implemented; lines=17; h=5134bc375d */ }
 /// For Swift bodies: a gentle pass that trims trailing spaces and collapses 3+ blank lines to 2.
-private func lightlyCondenseWhitespace(_ s: String) -> String  { /* elided-implemented; lines=3; h=1915e1f8b0 */ }
+private func lightlyCondenseWhitespace(_ s: String) -> String { /* elided-implemented; lines=3; h=f8b0859b0c */ }
 // MARK: - Swift policies
 enum SwiftPolicy {
 case keepAllBodiesLightlyCondensed            // s ≥ 0.75
@@ -350,20 +350,20 @@ case keepPublicBodiesElideOthers              // 0.50 ≤ s < 0.75
 case keepOneBodyPerTypeElideRest              // 0.25 ≤ s < 0.50
 case signaturesOnly                           // s < 0.25
 }
-func policyFor(score: Double) -> SwiftPolicy  { /* elided-implemented; lines=5; h=ba32b2f94c */ }
+func policyFor(score: Double) -> SwiftPolicy { /* elided-implemented; lines=5; h=f94cf34ef9 */ }
 // MARK: - Swift rendering (mechanical, deterministic elision)
 /// Mechanically elide Swift function/initializer/subscript bodies according to policy.
 /// Uses SwiftSyntax rewriting to preserve signatures verbatim.
-func renderSwift(text: String, policy: SwiftPolicy) throws -> String  { /* elided-implemented; lines=106; h=2d0af78461 */ }
+func renderSwift(text: String, policy: SwiftPolicy) throws -> String { /* elided-implemented; lines=106; h=846128b04d */ }
 }
 extension StringProtocol {
-var isNewline: Bool { /* elided-implemented; lines=0; h=cbf29ce484 */ }
+var isNewline : Bool { /* elided-implemented; lines=1; h=894c3f7941 */ }
 }
 FILE: Sources/llminty/App.swift
 
 import Foundation
 enum BuiltInExcludes {
-static func defaultPatterns(outputFileName: String) -> [String] { /* elided-implemented; lines=22; h=d813ebcf2d */ }
+static func defaultPatterns(outputFileName: String) -> [String] { /* elided-implemented; lines=22; h=cf2d87dd7c */ }
 }
 /// Aggressively trims blank lines for final output while keeping exactly one
 /// blank line after each "FILE: " header. Also:
@@ -371,18 +371,18 @@ static func defaultPatterns(outputFileName: String) -> [String] { /* elided-impl
 /// - collapses 3+ newlines to 2 during pre-pass,
 /// - removes all other blank-only lines.
 /// Returns a string that always ends with a single trailing newline.
-func postProcessMinty(_ s: String) -> String { /* elided-implemented; lines=29; h=88390ad5df */ }
+func postProcessMinty(_ s: String) -> String { /* elided-implemented; lines=29; h=d5df507979 */ }
 public struct LLMintyApp {
-public init() { /* elided-implemented; lines=0; h=cbf29ce484 */ }
-public func run() throws  { /* elided-implemented; lines=44; h=7b2ca81822 */ }
+public init() { /* empty */ }
+public func run() throws { /* elided-implemented; lines=44; h=1822f0f7b1 */ }
 }
 FILE: Tests/LLMintyTests/GraphCentralityTests.swift
 
 import XCTest
 @testable import llminty
 final class GraphCentralityTests: XCTestCase {
-private func analyzed(_ path: String, deps: [String]) -> AnalyzedFile { /* elided-implemented; lines=12; h=5f62342345 */ }
-func testDependencyAwareOrder() { /* elided-implemented; lines=9; h=28bdf54f34 */ }
+private func analyzed(_ path: String, deps: [String]) -> AnalyzedFile { /* elided-implemented; lines=12; h=23453d286a */ }
+func testDependencyAwareOrder() { /* elided-implemented; lines=9; h=4f347fcc86 */ }
 }
 FILE: Sources/llminty/JSONReducer.swift
 
@@ -392,12 +392,12 @@ enum JSONReducer {
 private static let head = 3
 private static let tail = 2
 private static let dictKeep = 6
-static func reduceJSONPreservingStructure(text: String) -> String  { /* elided-implemented; lines=11; h=d39309f81a */ }
-private static func reduce(_ v: Any, seen: Set<ObjectIdentifier>) -> Any  { /* elided-implemented; lines=4; h=5880122551 */ }
-private static func reduceArray(_ a: [Any], seen: Set<ObjectIdentifier>) -> Any  { /* elided-implemented; lines=9; h=c53be8bb5a */ }
-private static func reduceDict(_ d: [String: Any], seen: Set<ObjectIdentifier>) -> Any  { /* elided-implemented; lines=16; h=1bc6d3eaed */ }
-private static func stringify(_ v: Any) -> String  { /* elided-implemented; lines=39; h=b5849adf82 */ }
-private static func escape(_ s: String) -> String  { /* elided-implemented; lines=14; h=45778f2768 */ }
+static func reduceJSONPreservingStructure(text: String) -> String { /* elided-implemented; lines=11; h=f81a23daae */ }
+private static func reduce(_ v: Any, seen: Set<ObjectIdentifier>) -> Any { /* elided-implemented; lines=4; h=2551260e4d */ }
+private static func reduceArray(_ a: [Any], seen: Set<ObjectIdentifier>) -> Any { /* elided-implemented; lines=9; h=8bb5a4c60f */ }
+private static func reduceDict(_ d: [String: Any], seen: Set<ObjectIdentifier>) -> Any { /* elided-implemented; lines=16; h=eaede32b1a */ }
+private static func stringify(_ v: Any) -> String { /* elided-implemented; lines=39; h=df827135f6 */ }
+private static func escape(_ s: String) -> String { /* elided-implemented; lines=14; h=27686abb69 */ }
 }
 FILE: Sources/llminty/main.swift
 
@@ -415,7 +415,7 @@ FILE: Tests/LLMintyTests/SwiftAnalyzerTests.swift
 import XCTest
 @testable import llminty
 final class SwiftAnalyzerTests: XCTestCase {
-func testEntrypointPublicAPIAndRefs() throws { /* elided-implemented; lines=43; h=d32483cee6 */ }
+func testEntrypointPublicAPIAndRefs() throws { /* elided-implemented; lines=43; h=cee6bbf824 */ }
 }
 FILE: Tests/LLMintyTests/LLMintyTests.swift
 
@@ -423,26 +423,26 @@ import XCTest
 @testable import llminty
 final class LLMintyTests: XCTestCase {
 // End-to-end: builds a mini project, runs the app, checks minty.txt framing and ignore behavior.
-func testEndToEndRunCreatesMintyFile() throws { /* elided-implemented; lines=42; h=42dc501e55 */ }
+func testEndToEndRunCreatesMintyFile() throws { /* elided-implemented; lines=42; h=1e55f7cd45 */ }
 // Compaction policy: keep exactly one blank line after each FILE header, drop others,
 // but allow a single terminal blank line (trailing newline in the file).
-func testKeepsOneBlankAfterHeadersAndDropsOthers() { /* elided-implemented; lines=51; h=7911489478 */ }
+func testKeepsOneBlankAfterHeadersAndDropsOthers() { /* elided-implemented; lines=51; h=947806ead3 */ }
 }
 FILE: Tests/LLMintyTests/RenderingTests.swift
 
 import XCTest
 @testable import llminty
 final class RenderingTests: XCTestCase {
-func testPolicyForThresholds() { /* elided-implemented; lines=7; h=fe57fa5068 */ }
-func testRenderSwiftElidesNonPublicBodiesUnderPolicy() throws { /* elided-implemented; lines=21; h=b666e7f5f8 */ }
-func testRenderTextCompactsWhitespace() throws { /* elided-implemented; lines=13; h=a7c2feb995 */ }
+func testPolicyForThresholds() { /* elided-implemented; lines=7; h=5068d2aa2a */ }
+func testRenderSwiftElidesNonPublicBodiesUnderPolicy() throws { /* elided-implemented; lines=21; h=f5f8f1ca1a */ }
+func testRenderTextCompactsWhitespace() throws { /* elided-implemented; lines=13; h=b99595bb57 */ }
 }
 FILE: Tests/LLMintyTests/ScoringTests.swift
 
 import XCTest
 @testable import llminty
 final class ScoringTests: XCTestCase {
-func testScoringWeightsAndEntrypointBonus() { /* elided-implemented; lines=32; h=60f6a9487d */ }
+func testScoringWeightsAndEntrypointBonus() { /* elided-implemented; lines=32; h=487d54b6ef */ }
 }
 FILE: Package.resolved
 
@@ -544,20 +544,20 @@ FILE: Tests/LLMintyTests/FileScannerTests.swift
 import XCTest
 @testable import llminty
 final class FileScannerTests: XCTestCase {
-func testScanningKindsAndIgnores() throws { /* elided-implemented; lines=42; h=c56fdba17f */ }
+func testScanningKindsAndIgnores() throws { /* elided-implemented; lines=42; h=a17f4fd3fb */ }
 }
 FILE: Tests/LLMintyTests/IgnoreMatcherTests.swift
 
 import XCTest
 @testable import llminty
 final class IgnoreMatcherTests: XCTestCase {
-func testGlobAnchorsAndNegation() throws { /* elided-implemented; lines=31; h=2322aec199 */ }
+func testGlobAnchorsAndNegation() throws { /* elided-implemented; lines=31; h=c199d3e332 */ }
 }
 FILE: Tests/LLMintyTests/JSONReducerTests.swift
 
 import XCTest
 @testable import llminty
 final class JSONReducerTests: XCTestCase {
-func testArrayAndDictReduction() { /* elided-implemented; lines=8; h=95d2f4c15d */ }
-func testPassThroughOnInvalidJSON() { /* elided-implemented; lines=4; h=50098d33dd */ }
+func testArrayAndDictReduction() { /* elided-implemented; lines=8; h=c15d740ef1 */ }
+func testPassThroughOnInvalidJSON() { /* elided-implemented; lines=4; h=33ddb319e0 */ }
 }

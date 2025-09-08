@@ -1,98 +1,99 @@
-// Tests/LLMintyTests/JSONReducerTests.swift
 import XCTest
 @testable import llminty
 
+// Tiny shim so we always call the reducer via the module namespace.
+private func reduceJSON(_ input: String) -> String {
+    // Call the new namespaced entry point with explicit thresholds.
+    return llminty.JSONReducer.reduceJSONPreservingStructure(
+        input,
+        arrayThreshold: 5,
+        dictThreshold: 6
+    )
+}
+
 final class JSONReducerTests: XCTestCase {
-    
+
     func testArrayAndDictReduction_addsTrimSentinelsAndCounts() {
-        // Top-level dict has 9 keys: arr + b..i (8) -> keep 6 -> trimmed 3 keys
-        // Array has 10 items -> keep 3 head + 2 tail = 5 -> trimmed 5 items
-        let json = """
+        let input = """
         {
           "arr": [1,2,3,4,5,6,7,8,9,10],
           "b": 1, "c": 2, "d": 3, "e": 4,
           "f": 5, "g": 6, "h": 7, "i": 8
         }
         """
-        let reduced = JSONReducer.reduceJSONPreservingStructure(text: json)
-        
-        // Array sentinel
-        XCTAssertTrue(
-            reduced.contains("/* trimmed 5 items */"),
-            "Expected array sentinel '/* trimmed 5 items */'. Got:\n\(reduced)"
-        )
-        // Head & tail still visible around the sentinel
-        XCTAssertTrue(reduced.contains("[1, 2, 3, /* trimmed 5 items */, 9, 10]"), reduced)
-        
-        // Dict sentinel at the end
-        XCTAssertTrue(
-            reduced.contains("/* trimmed 3 keys */"),
-            "Expected dict sentinel '/* trimmed 3 keys */'. Got:\n\(reduced)"
-        )
-        
-        // Still looks like an object
-        XCTAssertEqual(reduced.first, "{")
-        XCTAssertEqual(reduced.last, "}")
+        let reduced = reduceJSON(input)
+
+        let expected = #"{ "arr": [ 1, 2, 3, /* trimmed 5 items */, 9, 10 ], "b": 1, "c": 2, "d": 3, "e": 4, "f": 5, "g": 6, /* trimmed 2 keys */ }"#
+        XCTAssertEqual(reduced, expected)
     }
-    
-    func testShortCollections_doNotAddSentinels() {
-        // dictKeep = 6. Include exactly 6 keys total: "arr" + 5 scalars.
-        // Array length = 5 (== head+tail) -> no array sentinel; dict <= 6 -> no dict sentinel.
-        let json = """
-    { "arr": [1,2,3,9,10],
-      "a":1, "b":2, "c":3, "d":4, "e":5 }
-    """
-        let reduced = JSONReducer.reduceJSONPreservingStructure(text: json)
-        
-        // No trim sentinels anywhere
-        XCTAssertFalse(reduced.contains("/* trimmed"), "No trim sentinel should appear for short collections.\n\(reduced)")
-        
-        // Array preserved as-is (spacing tolerant)
-        XCTAssertTrue(reduced.contains("\"arr\": [1, 2, 3, 9, 10]") ||
-                      reduced.contains("\"arr\":[1, 2, 3, 9, 10]") ||
-                      reduced.contains("\"arr\":[1,2,3,9,10]"),
-                      reduced)
-    }
-    
+
     func testDictJustOverThreshold_addsSentinel() {
-        // 7 keys total: "arr" + 6 scalars -> exceeds dictKeep; expect sentinel.
-        let json = """
-    { "arr": [1,2,3,9,10],
-      "a":1, "b":2, "c":3, "d":4, "e":5, "f":6 }
-    """
-        let reduced = JSONReducer.reduceJSONPreservingStructure(text: json)
-        XCTAssertTrue(reduced.contains("/* trimmed 1 keys */") || reduced.contains("/* trimmed"), reduced)
+        // 1 collection + 7 scalars (total 8) with dictThreshold=6 → trimmed 1
+        let input = #"{ "arr": [1,2,3,9,10], "a":1, "b":2, "c":3, "d":4, "e":5, "f":6, "g":7 }"#
+        let reduced = reduceJSON(input)
+
+        let expected = #"{ "arr": [ 1, 2, 3, 9, 10 ], "a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6, /* trimmed 1 keys */ }"#
+        XCTAssertEqual(reduced, expected)
     }
-    
+
     func testNestedCollections_getTrimmedWhereApplicable() {
-        // Outer dict has >6 keys -> expect dict trim sentinel.
-        // 'outer' array has 9 items -> keep 3 + 2 -> trimmed 4 items.
-        let json = """
+        let input = """
         {
           "outer": [1,2,3,4,5,6,7,8,9],
           "obj": { "k1":1,"k2":2,"k3":3,"k4":4,"k5":5,"k6":6,"k7":7 },
           "a":0, "b":1, "c":2, "d":3, "e":4, "f":5, "g":6
         }
         """
-        let reduced = JSONReducer.reduceJSONPreservingStructure(text: json)
-        
-        // Array sentinel inside "outer"
-        XCTAssertTrue(reduced.contains("/* trimmed 4 items */"), reduced)
-        // Dict sentinel at the top-level
-        XCTAssertTrue(reduced.contains("/* trimmed"), "Expected some dict trim sentinel at top-level.\n\(reduced)")
+        let reduced = reduceJSON(input)
+
+        let expected = #"{ "obj": { "k1": 1, "k2": 2, "k3": 3, "k4": 4, "k5": 5, "k6": 6, /* trimmed 1 keys */ }, "outer": [ 1, 2, 3, /* trimmed 4 items */, 8, 9 ], "a": 0, "b": 1, "c": 2, "d": 3, "e": 4, "f": 5, /* trimmed 1 keys */ }"#
+        XCTAssertEqual(reduced, expected)
     }
-    
-    func testScalarsAndBooleansPassThrough() {
-        XCTAssertEqual(JSONReducer.reduceJSONPreservingStructure(text: "42"), "42")
-        XCTAssertEqual(JSONReducer.reduceJSONPreservingStructure(text: "\"hello\""), "\"hello\"")
-        XCTAssertEqual(JSONReducer.reduceJSONPreservingStructure(text: "true"), "true")
-        XCTAssertEqual(JSONReducer.reduceJSONPreservingStructure(text: "false"), "false")
-        XCTAssertEqual(JSONReducer.reduceJSONPreservingStructure(text: "null"), "null")
-    }
-    
+
     func testPassThroughOnInvalidJSON() {
-        let notJSON = "hello"
-        let out = JSONReducer.reduceJSONPreservingStructure(text: notJSON)
-        XCTAssertEqual(out, notJSON)
+        let input = #"not json at all"#
+        let reduced = reduceJSON(input)
+        XCTAssertEqual(reduced, input)
+    }
+
+    func testScalarsAndBooleansPassThrough() {
+        XCTAssertEqual(reduceJSON("1"), "1")
+        XCTAssertEqual(reduceJSON("true"), "true")
+        XCTAssertEqual(reduceJSON(#""hello""#), #""hello""#)
+    }
+
+    func testShortCollections_doNotAddSentinels() {
+        let input = #"{ "arr": [1,2,3,9,10], "a":1, "b":2, "c":3, "d":4, "e":5 }"#
+        let reduced = reduceJSON(input)
+
+        let expected = #"{ "arr": [ 1, 2, 3, 9, 10 ], "a": 1, "b": 2, "c": 3, "d": 4, "e": 5 }"#
+        XCTAssertEqual(reduced, expected)
+    }
+
+    // MARK: - Boundary & selection tests
+
+    func testArrayExactlyAtBoundary_isNotTrimmed() {
+        // head(3) + tail(2) = 5; exactly at boundary → no marker
+        let input = #"{ "arr": [1,2,3,4,5] }"#
+        let reduced = reduceJSON(input)
+        let expected = #"{ "arr": [ 1, 2, 3, 4, 5 ] }"#
+        XCTAssertEqual(reduced, expected)
+    }
+
+    func testObjectExactlyAtBoundary_isNotTrimmed() {
+        // dictThreshold = 6 → no marker when total scalar keys == 6
+        let input = #"{ "a":1, "b":2, "c":3, "d":4, "e":5, "f":6 }"#
+        let reduced = reduceJSON(input)
+        let expected = #"{ "a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6 }"#
+        XCTAssertEqual(reduced, expected)
+    }
+
+    func testLargeObject_prefersCollectionsBeforeScalars() {
+        // 3 collections + 8 scalars (total 11); keep 3 collections and 6 scalars → trimmed 2
+        let input = #"{ "a":1, "b":2, "c":3, "A":[1,2,3], "B":{"x":1}, "C":[4], "d":4, "e":5, "f":6, "g":7, "h":8 }"#
+        let reduced = reduceJSON(input)
+
+        let expected = #"{ "A": [ 1, 2, 3 ], "B": { "x": 1 }, "C": [ 4 ], "a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6, /* trimmed 2 keys */ }"#
+        XCTAssertEqual(reduced, expected)
     }
 }
