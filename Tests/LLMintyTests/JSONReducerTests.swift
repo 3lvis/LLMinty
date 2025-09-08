@@ -354,7 +354,7 @@ final class JSONReducerTests: XCTestCase {
           ],
           "B": {
             "x": 1
-          ],
+          },
           "C": [
             4
           ],
