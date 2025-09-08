@@ -174,7 +174,48 @@ final class RenderingTests: XCTestCase {
         assertMatches(out, pattern: #"\bpackage\s+func\s+pkg\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
     }
 
+    /// NEW: public bodies are preserved regardless of source order; non-publics are elided under keepPublicBodiesElideOthers.
+    func testPublicBodiesKeptRegardlessOfPosition() throws {
+        let source = """
+        struct S {
+            func helper() { print("HELPER") }
+            public func api() { print("API") }
+            func other() { print("OTHER") }
+        }
+        """
+        let out = try Renderer().renderSwift(text: source, policy: .keepPublicBodiesElideOthers)
+        // public method 'api' must be preserved, even though it's after helper.
+        assertMatches(out, pattern: #"public\s+func\s+api\([^\)]*\)\s*\{\s*(?s:.*)API(?s:.*)\}"#)
+        // non-public helpers should be elided
+        assertMatches(out, pattern: #"\bfunc\s+helper\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
+        assertMatches(out, pattern: #"\bfunc\s+other\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
+    }
+
+    /// NEW: keep-one selects the highest-signal non-public body (init preferred over later long functions),
+    /// not simply the first executable encountered.
+    func testKeepOneSelectsHighestSignalNotFirst() throws {
+        let source = """
+        struct S {
+            private func helper() { print("H") }
+            func longOne() {
+                for i in 0..<5 {
+                    print(i)
+                }
+            }
+            init() { self.x = 0 }
+        }
+        """
+        let out = try Renderer().renderSwift(text: source, policy: .keepOneBodyPerTypeElideRest)
+        // init should be chosen (preferred over longest non-public), and thus kept.
+        assertMatches(out, pattern: #"\binit\(\)\s*\{\s*(?s:.*)self\.x(?s:.*)\}"#)
+        // longOne should be elided (even though it appears before init).
+        assertMatches(out, pattern: #"\bfunc\s+longOne\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
+        // helper should be elided
+        assertMatches(out, pattern: #"\bfunc\s+helper\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
+    }
+
     /// Keep-one keeps only the first executable per container; elided ones use rich sentinel.
+    /// (This test remains to ensure containers with an `init` still keep an init when it's the highest signal.)
     func testOneBodyPerContainerOnlyFirstExecutableIsKept() throws {
         let source = """
         struct C {
@@ -437,5 +478,26 @@ final class RenderingTests: XCTestCase {
         // Adding one blank line should increase the reported line count and change the hash.
         XCTAssertGreaterThan(b.lines, a.lines, "Expected extra blank line to increase lines= in sentinel")
         XCTAssertNotEqual(a.hash, b.hash, "Expected different h= when body text differs by blank line")
+    }
+
+    /// NEW: multiple public/open members are all preserved (not limited to one).
+    func testMultiplePublicMembersAreAllKept() throws {
+        let source = """
+    public struct M {
+        public func a() { print("A") }
+        open func b() { print("B") }
+        func internalOne() { print("I1") }
+        fileprivate func internalTwo() { print("I2") }
+    }
+    """
+        let out = try Renderer().renderSwift(text: source, policy: .keepPublicBodiesElideOthers)
+
+        // Both public and open must be preserved (full bodies).
+        assertMatches(out, pattern: #"public\s+func\s+a\([^\)]*\)\s*\{\s*(?s:.*)A(?s:.*)\}"#)
+        assertMatches(out, pattern: #"open\s+func\s+b\([^\)]*\)\s*\{\s*(?s:.*)B(?s:.*)\}"#)
+
+        // Non-public ones should be elided with the sentinel.
+        assertMatches(out, pattern: #"\bfunc\s+internalOne\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
+        assertMatches(out, pattern: #"\bfileprivate\s+func\s+internalTwo\([^\)]*\)\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
     }
 }
