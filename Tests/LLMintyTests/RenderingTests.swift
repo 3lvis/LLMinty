@@ -364,4 +364,78 @@ final class RenderingTests: XCTestCase {
         let out = try Renderer().renderSwift(text: source, policy: .signaturesOnly)
         assertMatches(out, pattern: #"\bdeinit\s*\{\s*\#(RenderingTests.sentinelPattern)\s*\}"#)
     }
+
+    // MARK: - Trivia & sentinel rawness regression guards
+
+    /// Do not glue closing braces to subsequent `// MARK:` lines or next decls.
+    // Replace this whole test in RenderingTests.swift
+    func testPreservesTriviaAroundMarksAndBetweenDecls() throws {
+        let source = """
+    // MARK: - Parser
+    private func parse() { print("A") }
+    
+    // MARK: - Eval
+    func eval() { print("B") }
+    """
+        let out = try Renderer().renderSwift(text: source, policy: .signaturesOnly)
+
+        // First MARK can be at start-of-file; must begin on its own line.
+        assertMatches(out, pattern: #"(?m)^//\s*MARK:\s*-\s*Parser"#)
+        // Second MARK must be on a new line after the closing brace of the previous decl.
+        assertMatches(out, pattern: #"\}\s*\R//\s*MARK:\s*-\s*Eval"#)
+
+        // Never same-line glue: `} // MARK:` or `}// MARK:` (no newline between).
+        assertNotMatches(out, pattern: #"\}[ \t]*//\s*MARK:"#)
+        assertNotMatches(out, pattern: #"\}//\s*MARK:"#)
+
+        // After each MARK, the following decl must start on the next line.
+        assertMatches(out, pattern: #"//\s*MARK:\s*-\s*Parser\R\s*private\s+func\s+parse\("#)
+        assertMatches(out, pattern: #"//\s*MARK:\s*-\s*Eval\R\s*func\s+eval\("#)
+
+        // And guard against historical glue `}private` / `}func` (no newline).
+        assertNotMatches(out, pattern: #"\}[ \t]*private\s+func"#)
+        assertNotMatches(out, pattern: #"\}[ \t]*func\s+[A-Za-z_]"#)
+    }
+
+    /// The sentinel must be computed from the *exact* body text, including blank lines.
+    func testSentinelUsesExactBodyTextForLinesAndHash() throws {
+        // Compact body: two statements, no blank line between.
+        let compact = """
+        func x() {
+            print(1)
+            print(2)
+        }
+        """
+        // Spaced body: identical but with one blank line between statements.
+        let spaced = """
+        func x() {
+            print(1)
+        
+            print(2)
+        }
+        """
+
+        let outCompact = try Renderer().renderSwift(text: compact, policy: .signaturesOnly)
+        let outSpaced  = try Renderer().renderSwift(text: spaced,  policy: .signaturesOnly)
+
+        // Extract lines and hash from the sentinel comment.
+        let rx = try! NSRegularExpression(pattern: #"lines=(\d+);\s*h=([0-9a-f]{8,12})"#, options: [])
+        func extract(_ s: String) -> (lines: Int, hash: String) {
+            let range = NSRange(s.startIndex..., in: s)
+            guard let m = rx.firstMatch(in: s, options: [], range: range) else {
+                XCTFail("no sentinel found in: \(s)")
+                return (0, "")
+            }
+            let linesStr = (s as NSString).substring(with: m.range(at: 1))
+            let hashStr  = (s as NSString).substring(with: m.range(at: 2))
+            return (Int(linesStr) ?? -1, hashStr)
+        }
+
+        let a = extract(outCompact)
+        let b = extract(outSpaced)
+
+        // Adding one blank line should increase the reported line count and change the hash.
+        XCTAssertGreaterThan(b.lines, a.lines, "Expected extra blank line to increase lines= in sentinel")
+        XCTAssertNotEqual(a.hash, b.hash, "Expected different h= when body text differs by blank line")
+    }
 }
