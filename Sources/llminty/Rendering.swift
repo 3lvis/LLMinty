@@ -26,7 +26,17 @@ final class Renderer {
         case .swift:
             let text = try renderSwift(text: file.analyzed.text, policy: policy)
             return RenderedFile(relativePath: file.analyzed.file.relativePath, content: text)
-        case .text, .unknown, .json:
+
+        case .json:
+            // Produce the exact “/* trimmed … */” markers the e2e test looks for.
+            let text = JSONReducer.reduceJSONPreservingStructure(
+                file.analyzed.text,
+                arrayThreshold: 5,
+                dictThreshold: 6
+            )
+            return RenderedFile(relativePath: file.analyzed.file.relativePath, content: text)
+
+        case .text, .unknown:
             let text = Renderer.compactText(file.analyzed.text)
             return RenderedFile(relativePath: file.analyzed.file.relativePath, content: text)
         case .binary:
