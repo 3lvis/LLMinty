@@ -140,15 +140,21 @@ fileprivate final class ElideBodiesRewriter: SyntaxRewriter {
     override func visit(_ node: FunctionDeclSyntax) -> DeclSyntax {
         guard let body = node.body else { return DeclSyntax(node) }
 
+        // If body is truly empty, never elide with sentinel; let outer canonicalizer handle `{ /* empty */ }`.
+        if body.statements.isEmpty { return DeclSyntax(node) }
+
         switch policy {
         case .keepAllBodiesLightlyCondensed:
             return DeclSyntax(node)
+
         case .keepPublicBodiesElideOthers:
             if isPublicOrOpen(node.modifiers) { return DeclSyntax(node) }
             return DeclSyntax(parseDeclReplacingBody(of: node, withSentinelFor: body))
+
         case .keepOneBodyPerTypeElideRest:
             if markFirstIfNeeded() { return DeclSyntax(node) }
             return DeclSyntax(parseDeclReplacingBody(of: node, withSentinelFor: body))
+
         case .signaturesOnly:
             return DeclSyntax(parseDeclReplacingBody(of: node, withSentinelFor: body))
         }
@@ -156,15 +162,22 @@ fileprivate final class ElideBodiesRewriter: SyntaxRewriter {
 
     override func visit(_ node: InitializerDeclSyntax) -> DeclSyntax {
         guard let body = node.body else { return DeclSyntax(node) }
+
+        // If body is truly empty, never elide with sentinel; let outer canonicalizer handle `{ /* empty */ }`.
+        if body.statements.isEmpty { return DeclSyntax(node) }
+
         switch policy {
         case .keepAllBodiesLightlyCondensed:
             return DeclSyntax(node)
+
         case .keepPublicBodiesElideOthers:
             if isPublicOrOpen(node.modifiers) { return DeclSyntax(node) }
             return DeclSyntax(parseDeclReplacingBody(of: node, withSentinelFor: body))
+
         case .keepOneBodyPerTypeElideRest:
             if markFirstIfNeeded() { return DeclSyntax(node) }
             return DeclSyntax(parseDeclReplacingBody(of: node, withSentinelFor: body))
+
         case .signaturesOnly:
             return DeclSyntax(parseDeclReplacingBody(of: node, withSentinelFor: body))
         }
