@@ -1,3 +1,5 @@
+// Tests/JSONReducerTests.swift
+
 import XCTest
 @testable import llminty
 
@@ -128,37 +130,108 @@ final class JSONReducerTests: XCTestCase {
     func testArrayAndDictReduction_addsTrimSentinelsAndCounts() {
         let input = """
         {
-          "arr": [1,2,3,4,5,6,7,8,9,10],
-          "b": 1, "c": 2, "d": 3, "e": 4,
-          "f": 5, "g": 6, "h": 7, "i": 8
+          "arr": [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+          ],
+          "b": 1,
+          "c": 2,
+          "d": 3,
+          "e": 4,
+          "f": 5,
+          "g": 6,
+          "h": 7,
+          "i": 8
         }
         """
         let reduced = reduceJSON(input)
 
-        let expected = #"{ "arr": [ 1, 2, 3, /* trimmed 5 items */, 9, 10 ], "b": 1, "c": 2, "d": 3, "e": 4, "f": 5, "g": 6, /* trimmed 2 keys */ }"#
+        let expected = """
+        {
+          "arr": [
+            1,
+            2,
+            /* trimmed 7 items */,
+            10
+          ],
+          "b": 1,
+          /* trimmed 7 keys */
+        }
+        """
         XCTAssertReducerEqual(reduced, expected)
     }
 
     func testDictJustOverThreshold_addsSentinel() {
-        // 1 collection + 7 scalars (total 8) with dictThreshold=6 → trimmed 1
-        let input = #"{ "arr": [1,2,3,9,10], "a":1, "b":2, "c":3, "d":4, "e":5, "f":6, "g":7 }"#
+        // 1 collection + 7 scalars (total 8) with dictThreshold=6 → trimmed aggressively
+        let input = """
+        {
+          "arr": [1, 2, 3, 9, 10],
+          "a": 1,
+          "b": 2,
+          "c": 3,
+          "d": 4,
+          "e": 5,
+          "f": 6,
+          "g": 7
+        }
+        """
         let reduced = reduceJSON(input)
 
-        let expected = #"{ "arr": [ 1, 2, 3, 9, 10 ], "a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6, /* trimmed 1 keys */ }"#
+        let expected = """
+        {
+          "arr": [
+            1,
+            2,
+            3,
+            9,
+            10
+          ],
+          "a": 1,
+          /* trimmed 6 keys */
+        }
+        """
         XCTAssertReducerEqual(reduced, expected)
     }
 
     func testNestedCollections_getTrimmedWhereApplicable() {
         let input = """
         {
-          "outer": [1,2,3,4,5,6,7,8,9],
-          "obj": { "k1":1,"k2":2,"k3":3,"k4":4,"k5":5,"k6":6,"k7":7 },
-          "a":0, "b":1, "c":2, "d":3, "e":4, "f":5, "g":6
+          "outer": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+          "obj": {
+            "k1": 1,
+            "k2": 2,
+            "k3": 3,
+            "k4": 4,
+            "k5": 5,
+            "k6": 6,
+            "k7": 7
+          },
+          "a": 0,
+          "b": 1,
+          "c": 2,
+          "d": 3,
+          "e": 4,
+          "f": 5,
+          "g": 6
         }
         """
         let reduced = reduceJSON(input)
 
-        let expected = #"{ "obj": { "k1": 1, "k2": 2, "k3": 3, "k4": 4, "k5": 5, "k6": 6, /* trimmed 1 keys */ }, "outer": [ 1, 2, 3, /* trimmed 4 items */, 8, 9 ], "a": 0, "b": 1, "c": 2, "d": 3, "e": 4, "f": 5, /* trimmed 1 keys */ }"#
+        let expected = """
+        {
+          "obj": {
+            "k1": 1,
+            /* trimmed 6 keys */
+          },
+          "outer": [
+            1,
+            2,
+            /* trimmed 6 items */,
+            9
+          ],
+          "a": 0,
+          /* trimmed 6 keys */
+        }
+        """
         XCTAssertReducerEqual(reduced, expected)
     }
 
@@ -176,38 +249,119 @@ final class JSONReducerTests: XCTestCase {
         XCTAssertEqual(reduceJSON(#""hello""#), #""hello""#)
     }
 
-    func testShortCollections_doNotAddSentinels() {
-        let input = #"{ "arr": [1,2,3,9,10], "a":1, "b":2, "c":3, "d":4, "e":5 }"#
+    func testShortCollections_doNotAddSentinels_but_scalars_get_capped() {
+        // Previously this test expected no trimming; with aggressive rules scalars will be capped.
+        let input = """
+        {
+          "arr": [1, 2, 3, 9, 10],
+          "a": 1,
+          "b": 2,
+          "c": 3,
+          "d": 4,
+          "e": 5
+        }
+        """
         let reduced = reduceJSON(input)
 
-        let expected = #"{ "arr": [ 1, 2, 3, 9, 10 ], "a": 1, "b": 2, "c": 3, "d": 4, "e": 5 }"#
+        let expected = """
+        {
+          "arr": [
+            1,
+            2,
+            3,
+            9,
+            10
+          ],
+          "a": 1,
+          /* trimmed 4 keys */
+        }
+        """
         XCTAssertReducerEqual(reduced, expected)
     }
 
     // MARK: - Boundary & selection tests
 
     func testArrayExactlyAtBoundary_isNotTrimmed() {
-        // head(3) + tail(2) = 5; exactly at boundary → no marker
-        let input = #"{ "arr": [1,2,3,4,5] }"#
+        // head(2) + tail(1) rule applies only when > arrayThreshold; array of 5 stays untrimmed here.
+        let input = """
+        {
+          "arr": [1, 2, 3, 4, 5]
+        }
+        """
         let reduced = reduceJSON(input)
-        let expected = #"{ "arr": [ 1, 2, 3, 4, 5 ] }"#
+        let expected = """
+        {
+          "arr": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        }
+        """
         XCTAssertReducerEqual(reduced, expected)
     }
 
-    func testObjectExactlyAtBoundary_isNotTrimmed() {
-        // dictThreshold = 6 → no marker when total scalar keys == 6
-        let input = #"{ "a":1, "b":2, "c":3, "d":4, "e":5, "f":6 }"#
+    func testObjectExactlyAtBoundary_is_trimmed_aggressively() {
+        // dictThreshold = 6 → earlier this kept all 6 scalars.
+        // With aggressive rules we keep at most 1 scalar.
+        let input = """
+        {
+          "a": 1,
+          "b": 2,
+          "c": 3,
+          "d": 4,
+          "e": 5,
+          "f": 6
+        }
+        """
         let reduced = reduceJSON(input)
-        let expected = #"{ "a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6 }"#
+        let expected = """
+        {
+          "a": 1,
+          /* trimmed 5 keys */
+        }
+        """
         XCTAssertReducerEqual(reduced, expected)
     }
 
     func testLargeObject_prefersCollectionsBeforeScalars() {
-        // 3 collections + 8 scalars (total 11); keep 3 collections and 6 scalars → trimmed 2
-        let input = #"{ "a":1, "b":2, "c":3, "A":[1,2,3], "B":{"x":1}, "C":[4], "d":4, "e":5, "f":6, "g":7, "h":8 }"#
+        // 3 collections + 8 scalars (total 11); we keep all collections and at most 1 scalar -> trimmed 7
+        let input = """
+        {
+          "a": 1,
+          "b": 2,
+          "c": 3,
+          "A": [1, 2, 3],
+          "B": { "x": 1 },
+          "C": [4],
+          "d": 4,
+          "e": 5,
+          "f": 6,
+          "g": 7,
+          "h": 8
+        }
+        """
         let reduced = reduceJSON(input)
 
-        let expected = #"{ "A": [ 1, 2, 3 ], "B": { "x": 1 }, "C": [ 4 ], "a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6, /* trimmed 2 keys */ }"#
+        let expected = """
+        {
+          "A": [
+            1,
+            2,
+            3
+          ],
+          "B": {
+            "x": 1
+          ],
+          "C": [
+            4
+          ],
+          "a": 1,
+          /* trimmed 7 keys */
+        }
+        """
         XCTAssertReducerEqual(reduced, expected)
     }
 }

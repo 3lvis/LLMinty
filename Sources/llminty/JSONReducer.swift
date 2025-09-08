@@ -6,8 +6,8 @@ public struct JSONReducer {
     /// Reduces a JSON string while preserving overall structure.
     /// - Parameters:
     ///   - input: UTF-8 JSON (fragments allowed). If invalid, returned unchanged.
-    ///   - arrayThreshold: Arrays longer than this are trimmed to first 3, comment, last 2.
-    ///   - dictThreshold: Objects keep all collection entries and up to this many scalar entries.
+    ///   - arrayThreshold: Arrays longer than this are trimmed to first 2, comment, last 1.
+    ///   - dictThreshold: Objects keep all collection entries and **at most 1 scalar entry** (regardless of dictThreshold).
     /// - Returns: One-line JSON string with optional trim comments.
     public static func reduceJSONPreservingStructure(_ input: String, arrayThreshold: Int, dictThreshold: Int) -> String {
         guard
@@ -71,9 +71,9 @@ public struct JSONReducer {
                 return .array(items)
             }
 
-            // Trim: first 3, comment, last 2
-            let headCount = min(3, array.count)
-            let tailCount = min(2, array.count - headCount)
+            // AGGRESSIVE TRIM: first 2, comment, last 1
+            let headCount = min(2, array.count)
+            let tailCount = min(1, array.count - headCount)
             let trimmedCount = array.count - headCount - tailCount
 
             let head = array.prefix(headCount).map { reduce(any: $0, arrayLimit: arrayLimit, dictScalarLimit: dictScalarLimit) }
@@ -104,12 +104,16 @@ public struct JSONReducer {
                 }
             }
 
+            // Always prefer collections first (they carry structure).
             kept.append(contentsOf: collections)
 
-            if dictScalarLimit >= scalars.count {
+            // AGGRESSIVE: keep at most 1 scalar entry (even if dictScalarLimit is higher).
+            let scalarKeep = max(0, min(1, dictScalarLimit))
+            if scalarKeep >= scalars.count {
+                // if scalarKeep >= count we keep scalars.count (but scalarKeep is at most 1)
                 kept.append(contentsOf: scalars)
             } else {
-                kept.append(contentsOf: scalars.prefix(dictScalarLimit))
+                kept.append(contentsOf: scalars.prefix(scalarKeep))
             }
 
             let trimmed = max(0, dict.count - kept.count)
