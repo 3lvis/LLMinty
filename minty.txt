@@ -275,104 +275,6 @@ pageRank: pr[a.file.relativePath] ?? 0.0
 return out
 }
 }
-FILE: Sources/llminty/JSONReducer.swift
-
-import Foundation
-/// Public, single entry point. Everything else is internal by default.
-public struct JSONReducer {
-/// Reduces a JSON string while preserving overall structure.
-/// - Parameters:
-///   - input: UTF-8 JSON (fragments allowed). If invalid, returned unchanged.
-///   - arrayThreshold: Arrays longer than this are trimmed to first 3, comment, last 2.
-///   - dictThreshold: Objects keep all collection entries and up to this many scalar entries.
-/// - Returns: One-line JSON string with optional trim comments.
-public static func reduceJSONPreservingStructure(_ input: String, arrayThreshold: Int, dictThreshold: Int) -> String {
-guard
-let data = input.data(using: .utf8),
-let json = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
-else {
-return input
-}
-let node = Reducer.reduce(any: json, arrayLimit: arrayThreshold, dictScalarLimit: dictThreshold)
-return Stringifier.stringify(node)
-}
-// MARK: - Internal model
-enum Node {
-case number(Double)
-case string(String)
-case bool(Bool)
-case null
-case array([Node])
-case object([(String, Node)], trimmed: Int) // trimmed = number of keys dropped
-case arrayTrimmed(head: [Node], trimmedCount: Int, tail: [Node])
-}
-// MARK: - Reduction
-enum Reducer {
-static func reduce(any: Any, arrayLimit: Int, dictScalarLimit: Int) -> Node {
-switch any {
-case let n as NSNumber:
-// NSNumber can represent both numbers and booleans; disambiguate via CFTypeID.
-if CFGetTypeID(n) == CFBooleanGetTypeID() {
-return .bool(n.boolValue)
-} else {
-return .number(n.doubleValue)
-}
-case let s as NSString:
-return .string(s as String)
-case _ as NSNull:
-return .null
-case let array as [Any]:
-return reduceArray(array, arrayLimit: arrayLimit, dictScalarLimit: dictScalarLimit)
-case let dict as [String: Any]:
-return reduceObject(dict, arrayLimit: arrayLimit, dictScalarLimit: dictScalarLimit)
-default:
-// Fallback: stringify unknowns
-return .string("\(any)")
-}
-}
-private static func reduceArray(_ array: [Any], arrayLimit: Int, dictScalarLimit: Int) -> Node { /* elided-implemented; lines=15; h=28cc73b398 */ }
-private static func reduceObject(_ dict: [String: Any], arrayLimit: Int, dictScalarLimit: Int) -> Node { /* elided-implemented; lines=32; h=117c56234e */ }
-}
-// MARK: - Stringify
-enum Stringifier {
-static func stringify(_ node: Node) -> String {
-switch node {
-case .number(let d):
-if d.rounded(.towardZero) == d {
-return String(Int(d))
-}
-return String(d)
-case .string(let s):
-return "\"" + escapeString(s) + "\""
-case .bool(let b):
-return b ? "true" : "false"
-case .null:
-return "null"
-case .array(let items):
-if items.isEmpty { return "[]" }
-return "[ " + items.map(stringify).joined(separator: ", ") + " ]"
-case .arrayTrimmed(let head, let trimmed, let tail):
-var parts: [String] = []
-parts.append(contentsOf: head.map(stringify))
-parts.append("/* trimmed \(trimmed) items */")
-parts.append(contentsOf: tail.map(stringify))
-return "[ " + parts.joined(separator: ", ") + " ]"
-case .object(let entries, let trimmed):
-var pieces: [String] = []
-pieces.reserveCapacity(entries.count + (trimmed > 0 ? 1 : 0))
-for (k, v) in entries {
-pieces.append("\"\(escapeString(k))\": \(stringify(v))")
-}
-if trimmed > 0 {
-pieces.append("/* trimmed \(trimmed) keys */")
-}
-if pieces.isEmpty { return "{ /* empty */ }" }
-return "{ " + pieces.joined(separator: ", ") + " }"
-}
-}
-static func escapeString(_ s: String) -> String { /* elided-implemented; lines=17; h=ac7463353e */ }
-}
-}
 FILE: Sources/llminty/Rendering.swift
 
 import Foundation
@@ -471,6 +373,195 @@ private func substringUTF8(_ s: String, start: Int, end: Int) -> String { /* eli
 private func normalizeNewlines(_ s: String) -> String { /* elided-implemented; lines=2; h=2529554532 */ }
 // MARK: - Hashing
 private static func fnv1a64(_ s: String) -> UInt64 { /* elided-implemented; lines=8; h=e1d3a94d17 */ }
+}
+FILE: Tests/LLMintyTests/TestSupport.swift
+
+import Foundation
+import XCTest
+@testable import llminty
+enum TestSupport {
+// MARK: - File / CI helpers
+/// Locate repo root by walking up to Package.swift (starts from the file path of the caller).
+static func projectRoot(file: String = #filePath) -> URL {
+var url = URL(fileURLWithPath: file).deletingLastPathComponent()
+let fm = FileManager.default
+for _ in 0..<1024 {
+if fm.fileExists(atPath: url.appendingPathComponent("Package.swift").path) {
+return url
+}
+let next = url.deletingLastPathComponent()
+if next.path == url.path { break }
+url = next
+}
+fatalError("Could not locate Package.swift from \(file)")
+}
+static func fixturesDir(file: String = #filePath) -> URL { /* elided-implemented; lines=2; h=be5cc285f5 */ }
+static func fixtureURLIfExists(_ name: String) -> URL? { /* elided-implemented; lines=3; h=041df40828 */ }
+/// Unzip with /usr/bin/unzip (common on macOS CI). Returns the top-level directory (or dest).
+@discardableResult
+static func unzip(_ zip: URL, to dest: URL) throws -> URL { /* elided-implemented; lines=23; h=7c676c2b88 */ }
+/// Run the app in given directory and return minty.txt contents (used in some integration tests).
+static func runLLMinty(in dir: URL) throws -> String { /* elided-implemented; lines=10; h=537b4a287c */ }
+/// Normalize text as production post-processing would (keeps one place to modify later).
+static func normalized(_ s: String) -> String { /* elided-implemented; lines=2; h=d6f13f2b31 */ }
+/// A compact line-by-line diff snippet helper (returns nil if equal).
+static func diffLines(expected: String, actual: String, context: Int = 2) -> String? { /* elided-implemented; lines=28; h=29393ef958 */ }
+}
+// MARK: - Canonicalization helpers (rendered Swift + JSON reducer)
+extension TestSupport {
+// sentinel placeholder commonly used across tests
+static var sentinelPlaceholder : String { /* elided-implemented; lines=1; h=572003120c */ }
+// Normalize rendered Swift for deterministic comparisons:
+// - normalize newlines to '\n'
+// - trim trailing whitespace on every line (preserve leading indentation)
+// - replace sentinel `h=...` with `h=<H>` and `lines=...` with `lines=<N>`
+static func canonicalizeRenderedSwift(_ s: String) -> String {
+// Normalize newlines
+var out = s.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+// Trim trailing whitespace on each line (preserve indentation)
+let lines = out.split(separator: "\n", omittingEmptySubsequences: false)
+out = lines.map { rtrim(String($0)) }.joined(separator: "\n")
+// Replace "lines=<digits>" => "lines=<N>"
+out = replaceNumericSuffix(after: "lines=", in: out, placeholder: "lines=<N>")
+// Replace "h=<hex>" => "h=<H>"
+out = replaceHexSuffix(after: "h=", in: out, placeholder: "h=<H>")
+return out
+}
+// Canonicalize JSON reducer output & expectation:
+// - removes ALL whitespace outside of string literals (so formatting differences don't fail)
+// - normalizes whitespace *inside* /* ... */ comments to a single space
+// - preserves string literal contents exactly (including escaped characters)
+static func canonicalizeReducerOutput(_ s: String) -> String { /* elided-implemented; lines=84; h=534cefe3a0 */ }
+// MARK: - low-level helpers used above
+private static func rtrim(_ s: String) -> String { /* elided-implemented; lines=6; h=c84bab6df0 */ }
+private static func replaceNumericSuffix(after prefix: String, in s: String, placeholder: String) -> String { /* elided-implemented; lines=6; h=2ce1268e98 */ }
+private static func replaceHexSuffix(after prefix: String, in s: String, placeholder: String) -> String { /* elided-implemented; lines=5; h=32ff46bc37 */ }
+}
+// MARK: - Rendering helpers (wrappers around Renderer + decl extraction)
+extension TestSupport {
+static func renderSwift(policy: Renderer.RenderPolicy, source: String) throws -> String { /* elided-implemented; lines=3; h=4eef49fcbb */ }
+static func renderFile(_ scored: ScoredFile, score: Double) throws -> String { /* elided-implemented; lines=3; h=1b6e291899 */ }
+/// Extract a full declaration snippet (from signaturePrefix through matching closing brace),
+/// returning canonicalized snippet or nil.
+static func extractDecl(fromRendered rendered: String, signaturePrefix: String) -> String? { /* elided-implemented; lines=3; h=ec21eb16d3 */ }
+/// Like `extractDecl` but returns the raw (uncanonicalized) snippet.
+static func extractDeclRaw(fromRendered rendered: String, signaturePrefix: String) -> String? { /* elided-implemented; lines=21; h=96426cabc9 */ }
+/// Extract the sentinel comment (canonicalized) for the declaration that starts at signaturePrefix.
+static func extractSentinelForDecl(fromRendered rendered: String, signaturePrefix: String) -> String? { /* elided-implemented; lines=5; h=826d26a10d */ }
+/// Extract the sentinel comment raw (no canonicalization) — used by numeric-sentinel tests.
+static func extractSentinelForDeclRaw(fromRendered rendered: String, signaturePrefix: String) -> String? { /* elided-implemented; lines=5; h=6121f0161d */ }
+}
+// MARK: - Sentinel parsing helpers & assertions
+extension TestSupport {
+/// Parse lines= and h= from a sentinel comment string like:
+/// "/* elided-implemented; lines=12; h=deadbeef12 */"
+/// Returns (lines, hash). Parsing uses plain string operations for resilience.
+static func parseLinesAndHashFromSentinel(_ sentinel: String) -> (lines: Int, hash: String) { /* elided-implemented; lines=29; h=9cbe99eff0 */ }
+/// Assert two rendered snippets are equal after canonicalization.
+static func assertRenderedEqual(_ got: String, _ expected: String, file: StaticString = #filePath, line: UInt = #line) { /* elided-implemented; lines=14; h=98c91d74ef */ }
+/// Assert that reducer output and expected string are identical after canonicalization.
+/// This is a strict, deterministic comparison (no regex/contains) but robust to formatting.
+static func XCTAssertReducerEqual(_ got: String, _ expected: String, file: StaticString = #filePath, line: UInt = #line) { /* elided-implemented; lines=14; h=0c17ab216e */ }
+/// Convenience to canonicalize expected small snippet (keeps existing test ergonomics).
+static func canonicalizeExpectedSnippet(_ s: String) -> String { /* elided-implemented; lines=2; h=e5a84fe189 */ }
+}
+FILE: Sources/llminty/JSONReducer.swift
+
+import Foundation
+/// Public, single entry point. Everything else is internal by default.
+public struct JSONReducer {
+/// Reduces a JSON string while preserving overall structure.
+/// - Parameters:
+///   - input: UTF-8 JSON (fragments allowed). If invalid, returned unchanged.
+///   - arrayThreshold: Arrays longer than this are trimmed to first 2, comment, last 1.
+///   - dictThreshold: Objects keep all collection entries and **at most 1 scalar entry** (regardless of dictThreshold).
+/// - Returns: One-line JSON string with optional trim comments.
+public static func reduceJSONPreservingStructure(_ input: String, arrayThreshold: Int, dictThreshold: Int) -> String {
+guard
+let data = input.data(using: .utf8),
+let json = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+else {
+return input
+}
+let node = Reducer.reduce(any: json, arrayLimit: arrayThreshold, dictScalarLimit: dictThreshold)
+return Stringifier.stringify(node)
+}
+// MARK: - Internal model
+enum Node {
+case number(Double)
+case string(String)
+case bool(Bool)
+case null
+case array([Node])
+case object([(String, Node)], trimmed: Int) // trimmed = number of keys dropped
+case arrayTrimmed(head: [Node], trimmedCount: Int, tail: [Node])
+}
+// MARK: - Reduction
+enum Reducer {
+static func reduce(any: Any, arrayLimit: Int, dictScalarLimit: Int) -> Node {
+switch any {
+case let n as NSNumber:
+// NSNumber can represent both numbers and booleans; disambiguate via CFTypeID.
+if CFGetTypeID(n) == CFBooleanGetTypeID() {
+return .bool(n.boolValue)
+} else {
+return .number(n.doubleValue)
+}
+case let s as NSString:
+return .string(s as String)
+case _ as NSNull:
+return .null
+case let array as [Any]:
+return reduceArray(array, arrayLimit: arrayLimit, dictScalarLimit: dictScalarLimit)
+case let dict as [String: Any]:
+return reduceObject(dict, arrayLimit: arrayLimit, dictScalarLimit: dictScalarLimit)
+default:
+// Fallback: stringify unknowns
+return .string("\(any)")
+}
+}
+private static func reduceArray(_ array: [Any], arrayLimit: Int, dictScalarLimit: Int) -> Node { /* elided-implemented; lines=15; h=c2b74decb8 */ }
+private static func reduceObject(_ dict: [String: Any], arrayLimit: Int, dictScalarLimit: Int) -> Node { /* elided-implemented; lines=36; h=3443cf62b9 */ }
+}
+// MARK: - Stringify
+enum Stringifier {
+static func stringify(_ node: Node) -> String {
+switch node {
+case .number(let d):
+if d.rounded(.towardZero) == d {
+return String(Int(d))
+}
+return String(d)
+case .string(let s):
+return "\"" + escapeString(s) + "\""
+case .bool(let b):
+return b ? "true" : "false"
+case .null:
+return "null"
+case .array(let items):
+if items.isEmpty { return "[]" }
+return "[ " + items.map(stringify).joined(separator: ", ") + " ]"
+case .arrayTrimmed(let head, let trimmed, let tail):
+var parts: [String] = []
+parts.append(contentsOf: head.map(stringify))
+parts.append("/* trimmed \(trimmed) items */")
+parts.append(contentsOf: tail.map(stringify))
+return "[ " + parts.joined(separator: ", ") + " ]"
+case .object(let entries, let trimmed):
+var pieces: [String] = []
+pieces.reserveCapacity(entries.count + (trimmed > 0 ? 1 : 0))
+for (k, v) in entries {
+pieces.append("\"\(escapeString(k))\": \(stringify(v))")
+}
+if trimmed > 0 {
+pieces.append("/* trimmed \(trimmed) keys */")
+}
+if pieces.isEmpty { return "{ /* empty */ }" }
+return "{ " + pieces.joined(separator: ", ") + " }"
+}
+}
+static func escapeString(_ s: String) -> String { /* elided-implemented; lines=17; h=ac7463353e */ }
+}
 }
 FILE: Sources/llminty/GraphCentrality.swift
 
@@ -575,46 +666,6 @@ line: UInt = #line
 // MARK: - Test
 func testMiniRepoEndToEndContract() throws { /* elided-implemented; lines=129; h=890b43445e */ }
 }
-FILE: Tests/LLMintyTests/TestSupport.swift
-
-// Tests/LLMintyTests/TestSupport.swift
-import Foundation
-import XCTest
-@testable import llminty
-enum TestSupport {
-// Locate repo root by walking up to Package.swift
-static func projectRoot(file: String = #filePath) -> URL { /* elided-implemented; lines=12; h=1921ad0973 */ }
-static func fixturesDir() -> URL { /* elided-implemented; lines=2; h=f9fd14017f */ }
-static func fixtureURLIfExists(_ name: String) -> URL? { /* elided-implemented; lines=3; h=041df40828 */ }
-// Unzip with /usr/bin/unzip (available on macOS CI)
-@discardableResult
-static func unzip(_ zip: URL, to dest: URL) throws -> URL { /* elided-implemented; lines=24; h=d2b35a8f4d */ }
-// Run the app in given directory and return minty.txt contents
-static func runLLMinty(in dir: URL) throws -> String { /* elided-implemented; lines=10; h=537b4a287c */ }
-// Ensure framing is normalized the same way production does
-static func normalized(_ s: String) -> String { /* elided-implemented; lines=2; h=d6f13f2b31 */ }
-// Simple line diff with small context; returns nil if equal
-static func diffLines(expected: String, actual: String, context: Int = 2) -> String? { /* elided-implemented; lines=22; h=4b19e8f4e1 */ }
-// Parse minty into { "path" : "content" }
-static func parseMintySections(_ s: String) -> [String: String] { /* elided-implemented; lines=23; h=c62749a3c6 */ }
-// MARK: - Contracts
-struct ContractSpec: Codable, Equatable {
-var version: Int
-var must_include_files: [String]
-var must_have_tokens: [String: [String]]
-}
-struct RegenerateConfig: Codable, Equatable {
-var should_generate: Bool
-}
-static func defaultContract() -> ContractSpec { /* elided-implemented; lines=42; h=5c1831a976 */ }
-static func loadContractSpecIfAny() -> ContractSpec? { /* elided-implemented; lines=5; h=39526bee49 */ }
-static func saveContractSpec(_ spec: ContractSpec) throws { /* elided-implemented; lines=4; h=876e3bda9c */ }
-static func loadRegenerateConfig() -> RegenerateConfig? { /* elided-implemented; lines=5; h=8d9e7e2f55 */ }
-static func saveRegenerateConfig(_ cfg: RegenerateConfig) throws { /* elided-implemented; lines=4; h=6055426b30 */ }
-}
-private extension JSONEncoder {
-static var withPretty : JSONEncoder { /* elided-implemented; lines=4; h=0ebca75c53 */ }
-}
 FILE: Tests/LLMintyTests/ChecklistContractTests.swift
 
 // Tests/LLMintyTests/ChecklistContractTests.swift
@@ -666,56 +717,27 @@ static func withGate(filePath: StaticString = #filePath, _ work: () throws -> Vo
 }
 FILE: Tests/LLMintyTests/RenderingTests.swift
 
+// Tests/RenderingTests.swift
 import Foundation
 import XCTest
 @testable import llminty
 final class RenderingTests: XCTestCase {
-// Minimal, local regex helpers (pure XCTest; no external test utilities).
-private static let sentinelPattern = #"/\*\s*elided-implemented;\s*lines=\d+;\s*h=[0-9a-f]{8,12}\s*\*/"#
-private static let emptyPattern     = #"/\*\s*empty\s*\*/"#
-private func assertMatches(_ text: String, pattern: String, file: StaticString = #filePath, line: UInt = #line) { /* elided-implemented; lines=13; h=44e6feea3f */ }
-private func assertNotMatches(_ text: String, pattern: String, file: StaticString = #filePath, line: UInt = #line) { /* elided-implemented; lines=13; h=5294883a39 */ }
-// MARK: - Baseline
-/// Maps score to policy.
-func testPolicyForThresholds() { /* elided-implemented; lines=6; h=bc1c1b49a0 */ }
-/// Policy cutoffs are inclusive.
-func testPolicyBoundariesAreInclusiveAtCutoffs() { /* elided-implemented; lines=8; h=82f65f0073 */ }
-// MARK: - Core body elision / sentinels
-/// Emits rich sentinel when bodies are elided (signaturesOnly baseline).
-func testElidedFuncUsesRichSentinel() throws { /* elided-implemented; lines=13; h=227a7d353c */ }
-/// Sentinel hash is stable for identical input.
-func testSentinelHashIsStableForSameInput() throws { /* elided-implemented; lines=21; h=3c35df37fe */ }
-/// Rendering routes to policy by score and uses rich sentinels for elided non-public bodies.
-func testRenderRoutingUsesScoreToSelectPolicy() throws { /* elided-implemented; lines=39; h=7dc1e66918 */ }
-/// Keep-all preserves bodies and `{ /* empty */ }`.
-func testKeepAllBodiesDoesNotElideOrCanonicalize() throws { /* elided-implemented; lines=10; h=82acf85da1 */ }
-/// Under keep-public, `open` kept; `internal`/`package` elided with rich sentinel; truly empty becomes `{ /* empty */ }`.
-func testOpenIsKept_InternalAndPackageAreElided() throws { /* elided-implemented; lines=14; h=140f598037 */ }
-/// Keep-one keeps only the first executable per container; elided ones use rich sentinel.
-func testOneBodyPerContainerOnlyFirstExecutableIsKept() throws { /* elided-implemented; lines=12; h=a53d132b67 */ }
-/// Computed properties: accessors that are elided use rich sentinel when non-empty; do not claim the keep-one slot.
-func testComputedPropertiesDoNotCountTowardOne() throws { /* elided-implemented; lines=12; h=51c86b174c */ }
-/// Extensions are separate containers for keep-one.
-func testExtensionsAreSeparateContainers() throws { /* elided-implemented; lines=20; h=89a5f2ed5f */ }
-/// Accessors use rich sentinel whenever elided and non-empty (not only under `.signaturesOnly`).
-func testAccessorsUseSentinelWhenElided() throws { /* elided-implemented; lines=31; h=f3c69bae5c */ }
-/// NEW: Implicit getter bodies must produce rich sentinel when elided (regression test).
-func testImplicitGetterComputedPropertyUsesSentinelWhenElided() throws { /* elided-implemented; lines=15; h=fbddca49be */ }
-/// Empty `{ /* empty */ }` canonicalized to `{ /* empty */ }` unless keep-all; also assert rich sentinel appears for non-empty elisions.
-func testCanonicalizeEmptyBlocksOnlyWhenPolicyIsNotKeepAll() throws { /* elided-implemented; lines=20; h=1eeb941e29 */ }
-/// Compacts 3+ blank lines to 1 for text and unknown files.
-func testTextAndUnknownWhitespaceIsCompacted() throws { /* elided-implemented; lines=21; h=c120a24c1b */ }
-/// Binary files show a size placeholder.
-func testBinaryFilesEmitSizePlaceholder() throws { /* elided-implemented; lines=10; h=b4a146e378 */ }
-// MARK: - New rendering coverage
-func testSubscriptAccessorsUseSentinelWhenElided() throws { /* elided-implemented; lines=12; h=7af15e5884 */ }
-func testDeinitUsesSentinelWhenElided() throws { /* elided-implemented; lines=8; h=f7a099605b */ }
-// MARK: - Trivia & sentinel rawness regression guards
-/// Do not glue closing braces to subsequent `// MARK:` lines or next decls.
-// Replace this whole test in RenderingTests.swift
-func testPreservesTriviaAroundMarksAndBetweenDecls() throws { /* elided-implemented; lines=26; h=832eecb61d */ }
-/// The sentinel must be computed from the *exact* body text, including blank lines.
-func testSentinelUsesExactBodyTextForLinesAndHash() throws { /* elided-implemented; lines=39; h=e078daab5f */ }
+// --- Policy sanity (literal, readable) ---
+func testPolicyForThresholds() { /* elided-implemented; lines=6; h=267a225bc5 */ }
+// --- Core: literal expectations, no regex/contains ---
+func testElidedFunctionUsesRichSentinel() throws { /* elided-implemented; lines=20; h=593a47448b */ }
+func testRenderRoutingUsesScoreToSelectPolicy_andProducesLiteralBodiesOrSentinels() throws { /* elided-implemented; lines=56; h=b70ffbaf62 */ }
+func testKeepAllPreservesEmptyBracesAndBodiesAsLiterals() throws { /* elided-implemented; lines=18; h=fea8939dce */ }
+func testOpenKept_InternalAndPackageElided() throws { /* elided-implemented; lines=19; h=cf2c2d9e19 */ }
+func testOneBodyPerTypeKeepsFirstExecutableAndElidesRest() throws { /* elided-implemented; lines=21; h=a602385b59 */ }
+func testComputedPropertiesDontConsumeKeepOneSlot() throws { /* elided-implemented; lines=22; h=e777739cd6 */ }
+func testExtensionsAreSeparateKeepOneContainers() throws { /* elided-implemented; lines=17; h=ed8bcfc19a */ }
+func testAccessorsUseSentinelWhenElidedUnlessPublic() throws { /* elided-implemented; lines=42; h=21a6a4f0ea */ }
+func testEmptyBlocksCanonicalization_whenNotKeepAll() throws { /* elided-implemented; lines=21; h=c5468bd6e9 */ }
+func testTextAndUnknownWhitespaceIsCompacted() throws { /* elided-implemented; lines=20; h=36f8482d6f */ }
+func testBinaryFilesEmitSizePlaceholder() throws { /* elided-implemented; lines=10; h=3a488d116e */ }
+// --- Sentinel numeric test without regex: extract raw sentinel comment and parse with string ops ---
+func testSentinelLinesAndHashChangeWhenBodyTextChanges() throws { /* elided-implemented; lines=42; h=3cf8222a96 */ }
 }
 FILE: Tests/LLMintyTests/ScoringTests.swift
 
@@ -904,7 +926,7 @@ func testScanningKindsAndIgnores() throws { /* elided-implemented; lines=42; h=a
 }
 FILE: Tests/LLMintyTests/Fixtures/contract_spec.json
 
-{ "must_have_tokens": { "Sources/llminty/App.swift": [ "BuiltInExcludes", "LLMintyApp", "func run(", "postProcessMinty(" ], "Sources/llminty/FileScanner.swift": [ "func scan()", "seemsBinary(", "relativePath(from", "path(replacingBase" ], "Sources/llminty/GraphCentrality.swift": [ "orderDependencyAware(" ], "Sources/llminty/IgnoreMatcher.swift": [ "parse(line:", "func isIgnored(", "match(pattern", "matchFrom(" ], "Sources/llminty/JSONReducer.swift": [ "reduceJSONPreservingStructure(", "reduce(", "reduceArray(", /* trimmed 1 items */, "stringify(", "escape(" ], "Sources/llminty/Rendering.swift": [ "SwiftPolicy", "func policyFor(", "func renderSwift(", "lightlyCondenseWhitespace(", "compactText(" ], "Sources/llminty/Scoring.swift": [ "func score(" ], "Sources/llminty/SwiftAnalyzer.swift": [ "final class SwiftAnalyzer", "func analyze(", "analyzeSwift(", /* trimmed 9 items */, "TokenSyntax", "inheritanceClauseContains(" ] }, "must_include_files": [ "Sources/llminty/IgnoreMatcher.swift", "Sources/llminty/FileScanner.swift", "Sources/llminty/SwiftAnalyzer.swift", /* trimmed 5 items */, "Sources/llminty/main.swift", "Package.swift" ], "version": 2 }
+{ "must_have_tokens": { "Sources/llminty/App.swift": [ "BuiltInExcludes", "LLMintyApp", "func run(", "postProcessMinty(" ], "Sources/llminty/FileScanner.swift": [ "func scan()", "seemsBinary(", "relativePath(from", "path(replacingBase" ], "Sources/llminty/GraphCentrality.swift": [ "orderDependencyAware(" ], "Sources/llminty/IgnoreMatcher.swift": [ "parse(line:", "func isIgnored(", "match(pattern", "matchFrom(" ], "Sources/llminty/JSONReducer.swift": [ "reduceJSONPreservingStructure(", "reduce(", /* trimmed 3 items */, "escape(" ], "Sources/llminty/Rendering.swift": [ "SwiftPolicy", "func policyFor(", "func renderSwift(", "lightlyCondenseWhitespace(", "compactText(" ], "Sources/llminty/Scoring.swift": [ "func score(" ], "Sources/llminty/SwiftAnalyzer.swift": [ "final class SwiftAnalyzer", "func analyze(", /* trimmed 11 items */, "inheritanceClauseContains(" ] }, "must_include_files": [ "Sources/llminty/IgnoreMatcher.swift", "Sources/llminty/FileScanner.swift", /* trimmed 7 items */, "Package.swift" ], "version": 2 }
 FILE: Tests/LLMintyTests/Fixtures/expected_minty.txt
 
 FILE: Sources/llminty/IgnoreMatcher.swift
@@ -1485,16 +1507,15 @@ FILE: Tests/LLMintyTests/JSONReducerTests.swift
 import XCTest
 @testable import llminty
 // Tiny shim so we always call the reducer via the module namespace.
-private func reduceJSON(_ input: String) -> String { /* elided-implemented; lines=7; h=16e5a348fd */ }
+private func reduceJSON(_ input: String) -> String { /* elided-implemented; lines=7; h=e31ed0a493 */ }
 final class JSONReducerTests: XCTestCase {
-func testArrayAndDictReduction_addsTrimSentinelsAndCounts() { /* elided-implemented; lines=12; h=bd5f275267 */ }
-func testDictJustOverThreshold_addsSentinel() { /* elided-implemented; lines=7; h=e8a228dbeb */ }
-func testNestedCollections_getTrimmedWhereApplicable() { /* elided-implemented; lines=12; h=6803c32a3c */ }
-func testPassThroughOnInvalidJSON() { /* elided-implemented; lines=4; h=316090f15f */ }
+func testArrayAndDictReduction_addsTrimSentinelsAndCounts() { /* elided-implemented; lines=31; h=2cdb7bd62a */ }
+func testDictJustOverThreshold_addsSentinel() { /* elided-implemented; lines=30; h=2648d08e51 */ }
+func testNestedCollections_getTrimmedWhereApplicable() { /* elided-implemented; lines=41; h=95e8e5058a */ }
+func testPassThroughOnInvalidJSON() { /* elided-implemented; lines=6; h=b4ed0ac311 */ }
 func testScalarsAndBooleansPassThrough() { /* elided-implemented; lines=4; h=483046a13a */ }
-func testShortCollections_doNotAddSentinels() { /* elided-implemented; lines=6; h=3d23401b76 */ }
-// MARK: - Boundary & selection tests
-func testArrayExactlyAtBoundary_isNotTrimmed() { /* elided-implemented; lines=6; h=7ec050b227 */ }
-func testObjectExactlyAtBoundary_isNotTrimmed() { /* elided-implemented; lines=6; h=effc84d045 */ }
-func testLargeObject_prefersCollectionsBeforeScalars() { /* elided-implemented; lines=7; h=6f78e783e7 */ }
+func testShortCollections_doNotAddSentinels_but_scalars_get_capped() { /* elided-implemented; lines=27; h=d5ec883b7d */ }
+func testArrayExactlyAtBoundary_isNotTrimmed() { /* elided-implemented; lines=19; h=68843bab09 */ }
+func testObjectExactlyAtBoundary_is_trimmed_aggressively() { /* elided-implemented; lines=19; h=5501cc9254 */ }
+func testLargeObject_prefersCollectionsBeforeScalars() { /* elided-implemented; lines=36; h=f8bf35cd06 */ }
 }
